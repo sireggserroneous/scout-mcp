@@ -118,7 +118,7 @@ RESULT: fail | mikrotik.com/specs | nope 9 | NO_MATCH at step 1
 Every way to reach a page is a **move**:
 - the readers: `direct`, `firecrawl`, `crawl4ai`, `browser`
 - `url_rewrite`: a regex on the full url
-- `listing_path`: where a site keeps its index of things, such as `/products`, `/catalog` or `/docs`
+- `locale_prefix` × `listing_root`: where a site keeps its index of things, such as `/en-us` + `/products`
 - `detail_suffix`: where the details live, such as `/specifications`
 
 The idea comes from Markov chains and MarkovJunior-style rewrite rules. Each move takes Scout from one state to the
@@ -142,7 +142,27 @@ flowchart LR
 - **The register stores moves as data.** Each move has a scope (`*`, a domain or a host regex) and a Laplace score
   `(wins + 1) / (tries + 2)`. A move nobody has tried scores 0.5. A move that loses its first five tries is retired.
   Agents propose moves with `moves(action='propose', …)`, and real traffic decides which ones stay.
+- **Parts compose.** A listing url is a locale prefix (`""`, `/en-us`, `/us/en`, …) plus a catalogue root
+  (`/products`, `/collections`, `/catalog`, …). Scout ranks every pairing by the product of the two parts' scores. It
+  puts the locale in the url you gave it, or the one the host taught it, first. Credit is by contrast: when
+  `/products` wins after `/en/products` failed, only `/en` loses. When nothing wins, nothing is scored, because a
+  site with no listing teaches nothing about the parts.
 - **Recipes are the compiled layer on top.** Every run scores a recipe, the same way moves are scored.
+
+### The recipe book it ships with
+
+`scout_mcp/recipes.json` was distilled from 417 sites that a larger crawler had learned. Every one was checked live
+again on 2026-10-03 with Scout's own user agent, and only what held up was kept:
+
+- **Shared structure became scored parts.** The priors are measured. `/products` was the root of all 13 verified
+  catalogue indexes. A bare root (no locale) won 8 of 8. The `/en` prefix the old crawler kept guessing was real on
+  only 4 of 41 sites: the rest were 404s, homepage redirects, or soft 200s serving the homepage. `/specifications` is
+  the detail page on 5 sites.
+- **Per-site facts, only where a site differs** (147 sites): 56 need a rendering reader, 14 have a verified listing
+  (7 with a locale), 28 have item url patterns proven by a real catalogue, 6 have a detail suffix, and 59 put up a
+  wall (challenge, robots, refusal or login) that Scout reports before trying.
+- **Dropped:** unverified listings, including product pages, category pages, tag pages and a census.gov policy page
+  that had all passed as "listings", plus item patterns a small model guessed but a catalogue never proved.
 
 Point `SCOUT_DB` at a shared path and a whole team, people and agents alike, learns from each other's runs.
 

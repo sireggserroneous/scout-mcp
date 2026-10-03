@@ -43,7 +43,9 @@ async def moves(action: str = "list", kind: str = "", scope: str = "*", spec: di
     """The moves register: rewrite rules Scout tries where its built-in moves fail, each scored (wins+1)/(tries+2) on
     real reaches and retired after 5 straight losses.
     action=list [kind, host] | propose kind scope spec [note] | retire id.
-    kinds: url_rewrite {pattern, repl} (regex on the full url) · listing_path {path} · detail_suffix {suffix}.
+    kinds: url_rewrite {pattern, repl} (regex on the full url; repl is literal text plus \\1 groups) ·
+    locale_prefix {prefix} and listing_root {path}, which compose into listing paths (/en-us + /products) and are
+    ranked, never retired · listing_path {path} (a whole path) · detail_suffix {suffix}.
     scope: '*', a domain ('example.com' covers www.example.com) or a host regex. Propose only what you saw work."""
     if action == "propose":
         return await asyncio.to_thread(S.propose, kind, scope, spec or {}, "agent", note)

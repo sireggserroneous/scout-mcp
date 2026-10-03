@@ -1,121 +1,793 @@
 {
  "version": 1,
- "note": "Seed moves and recipes. Moves start at score 0.5 and earn or lose their place on your traffic. Recipes are compiled site plans a small model runs with one call.",
+ "note": "Seed moves and recipes. locale_prefix x listing_root compose listing paths; tries/wins are priors from a live check of 417 sites on 2026-10-03, and your own traffic keeps scoring them. hosts{} holds only what a site does differently: needs rendering, its verified listing and locale, item url patterns proven by a catalogue, its detail suffix, or a wall it put up. Recipes are compiled plans a small model runs in one call.",
  "moves": [
   {
-   "kind": "listing_path",
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": ""
+   },
+   "tries": 7,
+   "wins": 7
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/en"
+   },
+   "tries": 41,
+   "wins": 4
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/en-us"
+   },
+   "tries": 2,
+   "wins": 1
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/us/en"
+   },
+   "tries": 6,
+   "wins": 1
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/en-gb"
+   },
+   "tries": 1,
+   "wins": 1
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/us"
+   },
+   "tries": 0,
+   "wins": 0
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/en_US"
+   },
+   "tries": 0,
+   "wins": 0
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/th"
+   },
+   "tries": 1,
+   "wins": 0
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/nz/en"
+   },
+   "tries": 1,
+   "wins": 0
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/en-WW"
+   },
+   "tries": 1,
+   "wins": 0
+  },
+  {
+   "kind": "locale_prefix",
+   "scope": "*",
+   "spec": {
+    "prefix": "/us/es"
+   },
+   "tries": 1,
+   "wins": 0
+  },
+  {
+   "kind": "listing_root",
    "scope": "*",
    "spec": {
     "path": "/products"
-   }
+   },
+   "tries": 11,
+   "wins": 11
   },
   {
-   "kind": "listing_path",
-   "scope": "*",
-   "spec": {
-    "path": "/en/products"
-   }
-  },
-  {
-   "kind": "listing_path",
-   "scope": "*",
-   "spec": {
-    "path": "/en-us/products"
-   }
-  },
-  {
-   "kind": "listing_path",
+   "kind": "listing_root",
    "scope": "*",
    "spec": {
     "path": "/product"
-   }
+   },
+   "tries": 0,
+   "wins": 0
   },
   {
-   "kind": "listing_path",
+   "kind": "listing_root",
    "scope": "*",
    "spec": {
     "path": "/catalog"
-   }
+   },
+   "tries": 0,
+   "wins": 0
   },
   {
-   "kind": "listing_path",
+   "kind": "listing_root",
    "scope": "*",
    "spec": {
     "path": "/shop"
-   }
+   },
+   "tries": 1,
+   "wins": 0
   },
   {
-   "kind": "listing_path",
+   "kind": "listing_root",
    "scope": "*",
    "spec": {
-    "path": "/collections/all"
-   }
+    "path": "/collections"
+   },
+   "tries": 1,
+   "wins": 1
   },
   {
-   "kind": "listing_path",
+   "kind": "listing_root",
    "scope": "*",
    "spec": {
-    "path": "/all-products"
-   }
+    "path": "/product-type"
+   },
+   "tries": 0,
+   "wins": 0
   },
   {
-   "kind": "listing_path",
+   "kind": "listing_root",
    "scope": "*",
    "spec": {
     "path": "/products.html"
-   }
+   },
+   "tries": 1,
+   "wins": 1
   },
   {
-   "kind": "listing_path",
+   "kind": "listing_root",
+   "scope": "*",
+   "spec": {
+    "path": "/all-products"
+   },
+   "tries": 0,
+   "wins": 0
+  },
+  {
+   "kind": "listing_root",
    "scope": "*",
    "spec": {
     "path": "/docs"
-   }
+   },
+   "tries": 0,
+   "wins": 0
   },
   {
-   "kind": "listing_path",
+   "kind": "listing_root",
    "scope": "*",
    "spec": {
     "path": "/blog"
-   }
+   },
+   "tries": 0,
+   "wins": 0
+  },
+  {
+   "kind": "listing_root",
+   "scope": "*",
+   "spec": {
+    "path": "/Products"
+   },
+   "tries": 1,
+   "wins": 1
   },
   {
    "kind": "detail_suffix",
    "scope": "*",
    "spec": {
     "suffix": "/specifications"
-   }
-  },
-  {
-   "kind": "detail_suffix",
-   "scope": "*",
-   "spec": {
-    "suffix": "/specs"
-   }
+   },
+   "tries": 5,
+   "wins": 5
   },
   {
    "kind": "detail_suffix",
    "scope": "*",
    "spec": {
     "suffix": "/spec"
-   }
+   },
+   "tries": 1,
+   "wins": 1
+  },
+  {
+   "kind": "detail_suffix",
+   "scope": "*",
+   "spec": {
+    "suffix": "/specs"
+   },
+   "tries": 0,
+   "wins": 0
   },
   {
    "kind": "detail_suffix",
    "scope": "*",
    "spec": {
     "suffix": "/tech-specs"
-   }
+   },
+   "tries": 0,
+   "wins": 0
   },
   {
    "kind": "detail_suffix",
    "scope": "*",
    "spec": {
     "suffix": "/downloads"
-   }
+   },
+   "tries": 0,
+   "wins": 0
   }
  ],
- "hosts": {},
+ "hosts": {
+  "aa-bosch-ecat-ap.resource.bosch.com": {
+   "wall": "REFUSED"
+  },
+  "account.samsung.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "alaskacountyoffices.org": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "api.govinfo.gov": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "app.mercury.com": {
+   "render": true
+  },
+  "apps.legislature.ky.gov": {
+   "render": true
+  },
+  "aqcheckin.s3.amazonaws.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "archive.org": {
+   "render": true
+  },
+  "assets.hikvision.com": {
+   "wall": "REFUSED"
+  },
+  "automation.honeywell.com": {
+   "listing": "https://automation.honeywell.com/us/en/products",
+   "locale": "/us/en",
+   "item_patterns": [
+    "/us/en/products/sensing-solutions/gas-and-flame-detection/fixed-gas-and-flame-detection/fixed-gas-detectors/*",
+    "/us/en/products/sensing-solutions/gas-and-flame-detection/fixed-gas-and-flame-detection/fixed-detector-parts-and-accessories/*",
+    "/us/en/products/sensing-solutions/gas-and-flame-detection/high-tech-and-semiconductor/*",
+    "/us/en/products/sensing-solutions/gas-and-flame-detection/portables/multi-gas/*",
+    "/us/en/products/sensing-solutions/gas-and-flame-detection/fixed-gas-and-flame-detection/fixed-gas-controllers/*",
+    "/us/en/products/sensing-solutions/gas-and-flame-detection/calibration-gases/*"
+   ]
+  },
+  "bat.bing.com": {
+   "render": true
+  },
+  "bibliotecavirtual.estado.pr.gov": {
+   "render": true
+  },
+  "cdn.mikrotik.com": {
+   "wall": "REFUSED"
+  },
+  "clients.arlington.com": {
+   "wall": "LOGIN_REQUIRED"
+  },
+  "cloud.arlington.com": {
+   "render": true
+  },
+  "cms2.sol.com": {
+   "render": true
+  },
+  "code.dccouncil.gov": {
+   "render": true
+  },
+  "command.verkada.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "community.solidigm.com": {
+   "render": true
+  },
+  "content.assaabloyusa.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "data.census.gov": {
+   "render": true
+  },
+  "datasheets.lifesafetypower.com": {
+   "wall": "LOGIN_REQUIRED"
+  },
+  "dictionary.cambridge.org": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "digicat.se.com": {
+   "wall": "REFUSED"
+  },
+  "doc.milestonesys.com": {
+   "render": true
+  },
+  "docs.api.iga.in.gov": {
+   "wall": "REFUSED"
+  },
+  "download.schneider-electric.com": {
+   "render": true
+  },
+  "ecfr.federalregister.gov": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "ecode360.com": {
+   "wall": "LOGIN_REQUIRED"
+  },
+  "empower.abb.com": {
+   "render": true
+  },
+  "example.com": {
+   "render": true
+  },
+  "f.atlasied.com": {
+   "wall": "REFUSED"
+  },
+  "forms.cloud.microsoft": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "govt.westlaw.com": {
+   "render": true
+  },
+  "gs-gsconnector-us.resource.bosch.com": {
+   "wall": "REFUSED"
+  },
+  "law.justia.com": {
+   "render": true
+  },
+  "leginfo.legislature.ca.gov": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "legiscan.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "legislation.nysenate.gov": {
+   "render": true
+  },
+  "legislature.idaho.gov": {
+   "render": true
+  },
+  "library.municode.com": {
+   "render": true
+  },
+  "lixilspecification.americanstandard-us.com": {
+   "render": true
+  },
+  "media.fluke.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "mgaleg.maryland.gov": {
+   "render": true
+  },
+  "mikrotik.com": {
+   "listing": "https://mikrotik.com/products",
+   "item_patterns": [
+    "/product/*"
+   ]
+  },
+  "milestonesystems.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "my.lonestar.edu": {
+   "wall": "LOGIN_REQUIRED"
+  },
+  "myeddie.edwardsfiresafety.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "nycourts.gov": {
+   "render": true
+  },
+  "org.downloadcenter.samsung.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "portal.lenels2.com": {
+   "render": true
+  },
+  "prod-edam.honeywell.com": {
+   "render": true
+  },
+  "productresources.commscope.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "reprints.theygsgroup.com": {
+   "wall": "REFUSED"
+  },
+  "rog.asus.com": {
+   "item_patterns": [
+    "/us/apparel-bags-gear/apparel/*",
+    "/us/apparel-bags-gear/bags/*",
+    "/us/apparel-bags-gear/gear/*"
+   ],
+   "detail_suffix": "/spec"
+  },
+  "services.google.com": {
+   "wall": "LOGIN_REQUIRED"
+  },
+  "snuggymom.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "sourcetags.sensormatic.com": {
+   "render": true
+  },
+  "static.helpjuice.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "store.ui.com": {
+   "item_patterns": [
+    "/us/en/products/*"
+   ]
+  },
+  "store.verkada.com": {
+   "render": true
+  },
+  "systemusers.lenels2.com": {
+   "wall": "LOGIN_REQUIRED"
+  },
+  "training.lenels2.com": {
+   "render": true
+  },
+  "uptimeinstitute.com": {
+   "wall": "LOGIN_REQUIRED"
+  },
+  "us.allegion.com": {
+   "render": true
+  },
+  "us.rs-online.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "webfiles.nycourts.gov": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.acronymfinder.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.adiglobaldistribution.us": {
+   "render": true
+  },
+  "www.aiphone.com": {
+   "listing": "https://www.aiphone.com/products/",
+   "item_patterns": [
+    "/products/*"
+   ],
+   "detail_suffix": "/specifications"
+  },
+  "www.aldi.us": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "www.americanstandard-us.com": {
+   "item_patterns": [
+    "/products/*"
+   ],
+   "detail_suffix": "/specifications"
+  },
+  "www.apc-us.com": {
+   "detail_suffix": "/specifications"
+  },
+  "www.apc.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "www.arcat.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.arista.com": {
+   "item_patterns": [
+    "/en/products/*"
+   ]
+  },
+  "www.arlingtonma.gov": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.arlingtontx.gov": {
+   "render": true
+  },
+  "www.atlasied.com": {
+   "item_patterns": [
+    "/N-N"
+   ]
+  },
+  "www.axis.com": {
+   "item_patterns": [
+    "/products/*"
+   ]
+  },
+  "www.bestproductsreviews.com": {
+   "render": true
+  },
+  "www.bhphotovideo.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.biamp.com": {
+   "item_patterns": [
+    "/products/families/*",
+    "/products/categories/*"
+   ],
+   "detail_suffix": "/specifications"
+  },
+  "www.bibbal.com": {
+   "render": true
+  },
+  "www.bluspaandsalon.com": {
+   "wall": "LOGIN_REQUIRED"
+  },
+  "www.bogen.com": {
+   "item_patterns": [
+    "/product/modules/*"
+   ]
+  },
+  "www.britannica.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.capitol.hawaii.gov": {
+   "render": true
+  },
+  "www.chatsworth.com": {
+   "item_patterns": [
+    "/en-us/products/power-monitoring-security/econnect-power-distribution-units/switched/switched-pro-econnect-pdu/*"
+   ]
+  },
+  "www.cisco.com": {
+   "item_patterns": [
+    "/c/en/us/support/collaboration-endpoints/headset-N-series/*"
+   ]
+  },
+  "www.cityofashford.com": {
+   "render": true
+  },
+  "www.commscope.com": {
+   "item_patterns": [
+    "/product-type/cable-assemblies/fiber-cable-assemblies/fiber-patch-cords/*"
+   ]
+  },
+  "www.congress.gov": {
+   "render": true
+  },
+  "www.courtlistener.com": {
+   "wall": "REFUSED"
+  },
+  "www.crestron.com": {
+   "render": true,
+   "listing": "https://www.crestron.com/Products",
+   "item_patterns": [
+    "/Products/Catalog/*"
+   ]
+  },
+  "www.cyberpowersystems.com": {
+   "item_patterns": [
+    "/product/accessories/power-inverters/*",
+    "/product/accessories/cables/*",
+    "/product/N-phase-ups-systems/N-phase-hardware/*",
+    "/product/accessories/battery-banks/*",
+    "/product/accessories/hubs/*",
+    "/product/accessories/travel-adapters/*"
+   ]
+  },
+  "www.datasheets.com": {
+   "render": true
+  },
+  "www.digikey.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.discoverpuertorico.com": {
+   "render": true
+  },
+  "www.dmp-us.com": {
+   "render": true
+  },
+  "www.dmp.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.drugs.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.dsautomobiles.com": {
+   "render": true
+  },
+  "www.ecfr.gov": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.edwardsfiresafety.com": {
+   "listing": "https://www.edwardsfiresafety.com/products"
+  },
+  "www.essentialbuildstore.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.findhelp.org": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "www.fluke.com": {
+   "listing": "https://www.fluke.com/en-us/products",
+   "locale": "/en-us",
+   "item_patterns": [
+    "/en-id/products/electrical-testing/*"
+   ]
+  },
+  "www.foodnetwork.com": {
+   "render": true
+  },
+  "www.functionaldevices.com": {
+   "render": true
+  },
+  "www.guam.gov": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "www.guitarcenter.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.hidglobal.com": {
+   "render": true
+  },
+  "www.hikvision.com": {
+   "listing": "https://www.hikvision.com/en/products/",
+   "locale": "/en"
+  },
+  "www.icc.com": {
+   "item_patterns": [
+    "/product/*"
+   ]
+  },
+  "www.ilga.gov": {
+   "render": true
+  },
+  "www.imdb.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "www.instagram.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "www.kleintools.com": {
+   "item_patterns": [
+    "/catalog/fixed-blade-screwdrivers/*"
+   ]
+  },
+  "www.legis.la.gov": {
+   "render": true
+  },
+  "www.legislation.gov.uk": {
+   "render": true
+  },
+  "www.lexisnexis.com": {
+   "wall": "LOGIN_REQUIRED"
+  },
+  "www.lifesafetypower.com": {
+   "listing": "https://www.lifesafetypower.com/en/products",
+   "locale": "/en",
+   "item_patterns": [
+    "/en/products/prowire-prewired/*"
+   ]
+  },
+  "www.mercury-security.com": {
+   "listing": "https://www.mercury-security.com/products/",
+   "item_patterns": [
+    "/products/*"
+   ]
+  },
+  "www.merriam-webster.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.micron.com": {
+   "item_patterns": [
+    "/products/memory/*"
+   ]
+  },
+  "www.milestonesystems.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "www.minisforum.com": {
+   "listing": "https://www.minisforum.com/collections",
+   "item_patterns": [
+    "/products/*",
+    "/collections/nas-series/products/*"
+   ]
+  },
+  "www.nmlegis.gov": {
+   "render": true
+  },
+  "www.npmjs.com": {
+   "render": true
+  },
+  "www.nvidia.com": {
+   "listing": "https://www.nvidia.com/en-gb/products/",
+   "locale": "/en-gb"
+  },
+  "www.nycourts.gov": {
+   "render": true
+  },
+  "www.nysenate.gov": {
+   "render": true
+  },
+  "www.nytimes.com": {
+   "wall": "CHALLENGE_WALL"
+  },
+  "www.panduit.com": {
+   "listing": "https://www.panduit.com/en/products.html",
+   "locale": "/en"
+  },
+  "www.reddit.com": {
+   "wall": "ROBOTS_DISALLOWED"
+  },
+  "www.se.com": {
+   "item_patterns": [
+    "/us/en/product/N/*",
+    "/us/en/product/NH-N/*"
+   ]
+  },
+  "www.seagate.com": {
+   "item_patterns": [
+    "/support/creative-pro/*",
+    "/products/creative-pro/*"
+   ],
+   "detail_suffix": "/specifications"
+  },
+  "www.skullcandy.com": {
+   "item_patterns": [
+    "/products/*"
+   ]
+  },
+  "www.sloan.com": {
+   "render": true,
+   "listing": "https://www.sloan.com/products",
+   "item_patterns": [
+    "/products/accessories/*",
+    "/products/accessories/dropspot/*",
+    "/products/accessories/optima-ebfetf/*",
+    "/products/accessories/optima-etf/*",
+    "/products/accessories/basys-efx/*"
+   ]
+  },
+  "www.sol.com": {
+   "render": true
+  },
+  "www.solidigm.com": {
+   "listing": "https://www.solidigm.com/en/products",
+   "locale": "/en"
+  },
+  "www.southwest.com": {
+   "render": true
+  },
+  "www.ssa.gov": {
+   "render": true
+  },
+  "www.startech.com": {
+   "item_patterns": [
+    "/en-us/audio-video-products/*"
+   ]
+  },
+  "www.tequipment.net": {
+   "render": true
+  },
+  "www.woodhousehyundai.com": {
+   "render": true
+  }
+ },
  "recipes": [
   {
    "name": "mikrotik.com/specs",

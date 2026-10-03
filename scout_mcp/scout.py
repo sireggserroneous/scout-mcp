@@ -36,7 +36,9 @@ PRUNE_TRIES = 5              # a register move that lost its first five tries is
 MIN_GOOD = 300               # fewer readable chars than this is not content
 EXCERPT = 6000
 MAX_BYTES = 25_000_000
-MOVE_KINDS = ("url_rewrite", "listing_path", "detail_suffix")
+MOVE_KINDS = ("url_rewrite", "listing_path", "detail_suffix", "locale_prefix", "listing_root")
+RANKED_ONLY = ("locale_prefix", "listing_root")   # parts that compose: ranked, never retired (a miss may be the other part's)
+_LOCALE = re.compile(r"^/((?:[a-z]{2}[-_])?[a-z]{2}(?:[-_][a-z]{2})?)(/(?:[a-z]{2}[-_])?[a-z]{2}(?:[-_][a-z]{2})?)?(?=/|$)", re.I)
 
 _CHALLENGE = re.compile(r"just a moment|attention required|captcha|verify you are (?:a )?human|are you a (?:human|robot)|"
                         r"cf-browser-verification|enable javascript and cookies|unusual traffic|access denied|"
@@ -84,8 +86,9 @@ def _seed(c):
     """The recipe book shipped with Scout: seed moves, plus any per-host recipes."""
     book = json.loads((Path(__file__).parent / "recipes.json").read_text())
     for m in book.get("moves", []):
-        c.execute("INSERT OR IGNORE INTO move (kind, scope, spec, proposed_by, note) VALUES (?, ?, ?, 'seed', ?)",
-                  (m["kind"], m.get("scope", "*"), json.dumps(m["spec"], sort_keys=True), m.get("note")))
+        c.execute("INSERT OR IGNORE INTO move (kind, scope, spec, proposed_by, note, tries, wins) VALUES (?, ?, ?, 'seed', ?, ?, ?)",
+                  (m["kind"], m.get("scope", "*"), json.dumps(m["spec"], sort_keys=True), m.get("note"),
+                   int(m.get("tries", 0)), int(m.get("wins", 0))))
     _ensure_recipes(c)
     for r in book.get("recipes", []):
         c.execute("INSERT OR IGNORE INTO recipe (name, about, input, steps, examples, updated) VALUES (?, ?, ?, ?, ?, ?)",
@@ -169,6 +172,10 @@ def _scope_hit(scope, host):
 def _valid(kind, spec):
     if kind not in MOVE_KINDS or not isinstance(spec, dict):
         return f"kind must be one of {', '.join(MOVE_KINDS)} and spec an object"
+    if kind == "locale_prefix" and not (spec.get("prefix") == "" or str(spec.get("prefix", "")).startswith("/")):
+        return "locale_prefix needs spec {'prefix': '/en-us'} ('' for none)"
+    if kind == "listing_root" and not str(spec.get("path", "")).startswith("/"):
+        return "listing_root needs spec {'path': '/products'} (starts with /)"
     if kind == "listing_path" and not str(spec.get("path", "")).startswith("/"):
         return "listing_path needs spec {'path': '/products'} (starts with /)"
     if kind == "detail_suffix" and not str(spec.get("suffix", "")).startswith(("/", "?", "#")):
@@ -176,6 +183,9 @@ def _valid(kind, spec):
     if kind == "url_rewrite":
         if not spec.get("pattern") or not isinstance(spec.get("repl"), str):
             return "url_rewrite needs spec {'pattern': <regex on the full url>, 'repl': <replacement, \\1 for groups>}"
+        if re.search(r"\.[*+]|\*\?|\\[dwsDWS]|\[\^?|\(\?", spec["repl"]):
+            return ("url_rewrite repl is literal text plus \\1 group references, not a regex: capture the part to keep "
+                    "in pattern, e.g. {pattern: '^(https://x.com/p/[^/]+)/specs$', repl: '\\1/specs?format=print'}")
         try:
             re.compile(spec["pattern"])
         except re.error as e:
@@ -213,7 +223,8 @@ def propose(kind, scope, spec, by="", note=""):
 def move_result(move_id, ok):
     try:
         with _db() as c:
-            c.execute("""UPDATE move SET tries=tries+1, wins=wins+?, dead=(tries+1 >= ? AND wins+? = 0) WHERE id=?""",
+            c.execute("""UPDATE move SET tries=tries+1, wins=wins+?,
+                         dead=(kind NOT IN ('locale_prefix', 'listing_root') AND tries+1 >= ? AND wins+? = 0) WHERE id=?""",
                       (int(ok), PRUNE_TRIES, int(ok), move_id))
     except sqlite3.Error:
         pass
@@ -294,8 +305,10 @@ def _convert(raw, ctype, url):
         md = "\n\n".join(t for t in ((pg.extract_text() or "").strip() for pg in rd.pages[:400]) if t)
         title = (rd.metadata.title if rd.metadata and rd.metadata.title else url.rsplit("/", 1)[-1])
         return {"markdown": md, "title": f"{title} ({len(rd.pages)} pages)", "links": [], "shell": False}
-    from bs4 import BeautifulSoup
+    import warnings
+    from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
     from markdownify import markdownify
+    warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
     soup = BeautifulSoup(raw, "html.parser")
     links = []
     for a in soup.find_all("a", href=True):
@@ -407,7 +420,7 @@ def judge(page, want=""):
         return "empty"
     if _CHALLENGE.search(title + " " + md[:1500]) and len(md) < 5000:
         return "challenge"
-    if len(md) < 8000 and _ERROR_PAGE.search(title + " " + md[:300]):
+    if _ERROR_PAGE.search(title) or (len(md) < 8000 and _ERROR_PAGE.search(md[:300])):
         return "error_page"
     if len(md) < 3000 and _LOGIN.search(title + " " + md[:600]):
         return "login_wall"
@@ -709,6 +722,56 @@ def site_map(url, filter="", limit=500, walk=20):
     return out
 
 
+def is_listing_page(asked, r):
+    """A listing is a page with 10+ distinct on-site links that is still where we asked: a redirect to the homepage or
+    to another host is the site saying 'no such page' politely (ui.com/en/products -> store homepage, 2026-10-03)."""
+    a, f = urllib.parse.urlsplit(asked), urllib.parse.urlsplit(r.get("url") or asked)
+    if f.netloc.lower().removeprefix("www.") != a.netloc.lower().removeprefix("www."):
+        return False
+    if a.path.strip("/") and (not f.path.strip("/") or re.search(r"/(default|index|home)\.(aspx?|html?|php)$", f.path, re.I)):
+        return False
+    paths = {urllib.parse.urlsplit(l["url"]).path for l in r.get("links") or []
+             if _host(l["url"]).removeprefix("www.") == a.netloc.lower().removeprefix("www.")}
+    return len(paths) >= 10
+
+
+def listing_candidates(url):
+    """Listing paths for a host, best first: every locale prefix x every listing root, scored by the product of the two
+    parts' scores (the chain picks each part independently), merged with whole listing_path moves. The host's learned
+    locale, then the locale in the url it was given, go first with score 1."""
+    p = urllib.parse.urlsplit(url if "://" in url else "https://" + url)
+    host = p.netloc.lower()
+    prefixes = [(m["spec"]["prefix"], m["id"], m["score"]) for m in moves("locale_prefix", host)]
+    known = [memory(host)["route"].get("locale"), (_LOCALE.match(p.path) or [None])[0]]
+    prefixes = [(k, None, 1.0) for k in dict.fromkeys(x for x in known if x)] + [x for x in prefixes if x[0] not in known]
+    out = {}
+    for pre, pid, ps in prefixes:
+        for r in moves("listing_root", host):
+            path = pre.rstrip("/") + r["spec"]["path"]
+            sc = ps * r["score"]
+            if sc > out.get(path, (None, None, -1))[2]:
+                out[path] = (path, {"prefix": (pre, pid), "root": (r["spec"]["path"], r["id"])}, sc)
+    for m in moves("listing_path", host):
+        if m["score"] > out.get(m["spec"]["path"], (None, None, -1))[2]:
+            out[m["spec"]["path"]] = (m["spec"]["path"], {"path": (m["spec"]["path"], m["id"])}, m["score"])
+    return sorted(out.values(), key=lambda x: -x[2])
+
+
+def _credit(tried, win):
+    """Learn by contrast. No winner teaches nothing (the site has no listing, or refuses us), so nothing is scored.
+    With a winner, its parts win, and each loser before it loses only on the part where it differed from the winner:
+    /en/products failing next to a winning /products is /en's fault, not /products'."""
+    if not win:
+        return
+    for slot, (_, mid) in win.items():
+        if mid:
+            move_result(mid, True)
+    for parts in tried:
+        for slot, (val, mid) in parts.items():
+            if mid and (slot not in win or win[slot][0] != val):
+                move_result(mid, False)
+
+
 def listing(url, urls=None):
     """Where the site keeps its index of things: the learned route, the sitemap's listing-shaped urls, then the
     register's listing_path moves, each scored. A listing is a page with 10+ on-site links."""
@@ -721,13 +784,8 @@ def listing(url, urls=None):
         return {"ok": True, "url": learned, "source": "learned"}
 
     def is_listing(u):
-        try:
-            if not _polite(u)[0]:
-                return False
-            pg = _direct(u, 20)
-        except Exception:  # noqa: BLE001
-            return False
-        return judge(pg) == "ok" and sum(_host(l["url"]) == host for l in pg["links"]) >= 10
+        r = reach(u, _depth=1, _links=True)
+        return bool(r["ok"]) and is_listing_page(u, r)
 
     cands = sorted({u for u in (urls or []) if _LISTING_WORDS.search(urllib.parse.urlsplit(u).path)},
                    key=lambda u: (urllib.parse.urlsplit(u).path.rstrip("/").count("/"), len(u)))
@@ -735,13 +793,18 @@ def listing(url, urls=None):
         if is_listing(u):
             learn(host, "listing", u)
             return {"ok": True, "url": u, "source": "sitemap"}
-    for mv in moves("listing_path", host)[:6]:
-        u = root + mv["spec"]["path"]
-        won = is_listing(u)
-        move_result(mv["id"], won)
-        if won:
-            learn(host, "listing", u)
-            return {"ok": True, "url": u, "source": f"listing_path #{mv['id']}"}
+    tried = []
+    for path, parts, score in listing_candidates(url)[:8]:
+        u = root + path
+        if not is_listing(u):
+            tried.append(parts)
+            continue
+        _credit(tried, parts)
+        learn(host, "listing", u)
+        m = _LOCALE.match(path)
+        if m:
+            learn(host, "locale", m.group(0))
+        return {"ok": True, "url": u, "source": "moves " + "+".join(f"#{v[1]}" for v in parts.values() if v[1]), "score": round(score, 3)}
     return {"ok": False, "candidates": cands[:8], "error": {"code": "NO_LISTING",
             "message": f"No listing page found on {host}: no learned route, no listing-shaped sitemap url, and the top listing_path moves did not render 10+ links.",
             "next_steps": [f"site_map('{root}') and read `patterns`: the busiest shape is usually the item pages.",
@@ -758,7 +821,9 @@ def scout(url, want="", full=False):
     host = _host(url)
     return {"ok": page["ok"], "page": page,
             "terrain": {"urls": sm["count"], "patterns": sm["patterns"][:10], "how": sm["how"], "robots": sm["robots"],
-                        "listing": lst.get("url"), "sample_urls": sm["urls"][:20], "map_error": sm.get("error")},
+                        "listing": lst.get("url"), "sample_urls": sm["urls"][:20], "map_error": sm.get("error"),
+                        "item_patterns": memory(host)["route"].get("item_patterns"),
+                        "known_wall": memory(host)["route"].get("wall")},
             "recipe": memory(host)}
 
 
@@ -978,7 +1043,7 @@ def demo():
     global DB_PATH
     import tempfile
     DB_PATH, _ready[0] = Path(tempfile.mkdtemp()) / "t.db", False
-    assert any(m["kind"] == "listing_path" for m in moves())
+    assert any(m["kind"] == "listing_root" for m in moves()) and any(m["kind"] == "locale_prefix" for m in moves())
     mid = propose("detail_suffix", "a.com", {"suffix": "/x"})["id"]
     for _ in range(PRUNE_TRIES):
         move_result(mid, False)
@@ -995,6 +1060,30 @@ def demo():
     assert compile_recipe("bad name", [])["error"]["code"] == "BAD_NAME"
     assert compile_recipe("a.com/x", [{"reach": "https://a.com/{input}"}], ["one"], input_name="m")["error"]["code"] == "NEED_EXAMPLES"
     assert run("a.com/none")["result"] == "RESULT: fail | a.com/none | - | NO_RECIPE"
+    assert _LOCALE.match("/us/en/products").group(0) == "/us/en" and _LOCALE.match("/en-gb/x").group(0) == "/en-gb"
+    assert not _LOCALE.match("/products") and _LOCALE.match("/en").group(0) == "/en"
+    propose("locale_prefix", "*", {"prefix": "/en"}); propose("locale_prefix", "*", {"prefix": ""})
+    propose("listing_root", "*", {"path": "/products"})
+    c = [x[0] for x in listing_candidates("https://b.com/us/en/thing")]
+    assert c[0].startswith("/us/en/") and "/us/en/products" in c[:3] and "/en/products" in c and "/products" in c, c[:8]
+    en = next(m for m in moves("locale_prefix") if m["spec"]["prefix"] == "/en")
+    pr = next(m for m in moves("listing_root") if m["spec"]["path"] == "/products")
+    _credit([{"prefix": ("/en", en["id"]), "root": ("/products", pr["id"])}], {"prefix": ("", None), "root": ("/products", pr["id"])})
+    assert next(m for m in moves("locale_prefix") if m["id"] == en["id"])["tries"] == en["tries"] + 1
+    assert next(m for m in moves("listing_root") if m["id"] == pr["id"])["wins"] == pr["wins"] + 1, "the shared part is not blamed"
+    before = moves("listing_root")
+    _credit([{"root": ("/products", pr["id"])}], None)
+    assert moves("listing_root") == before, "no winner, no lesson"
+    rid = pr["id"]
+    for _ in range(PRUNE_TRIES + 2):
+        move_result(rid, False)
+    assert any(m["id"] == rid for m in moves("listing_root")), "a composing part is ranked down, never retired"
+    many = [{"url": f"https://b.com/p/{i}"} for i in range(12)]
+    assert is_listing_page("https://b.com/products", {"url": "https://b.com/products", "links": many})
+    assert not is_listing_page("https://b.com/en/products", {"url": "https://b.com/", "links": many})
+    assert not is_listing_page("https://b.com/en/products", {"url": "https://b.com/Default.asp", "links": many})
+    assert not is_listing_page("https://b.com/en/products", {"url": "https://store.b2.com/us", "links": many})
+    assert not is_listing_page("https://b.com/products", {"url": "https://b.com/products", "links": many[:3] * 5})
     print("scout: ok")
 
 
