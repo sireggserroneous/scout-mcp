@@ -254,7 +254,27 @@
    "wall": "ROBOTS_DISALLOWED"
   },
   "alaskacountyoffices.org": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "alternative",
+    "name": "Alaska DCCED/DCRA Community Database (ArcGIS REST)",
+    "base_url": "https://maps.commerce.alaska.gov/server/rest/services/Community_Related/",
+    "docs_url": "https://dcra-cdo-dcced.opendata.arcgis.com/",
+    "cost": "free",
+    "terms": "State of Alaska open data; ArcGIS paging limits (maxRecordCount)",
+    "sample": "https://maps.commerce.alaska.gov/server/rest/services/Community_Related/Community_Locations_and_Boundaries/MapServer/3/query?where=1%3D1&outFields=*&returnGeometry=false&f=json",
+    "notes": "alaskacountyoffices.org is an unofficial aggregator (Alaska has boroughs/census areas, not counties). DCRA is authoritative for borough names/boundaries; office phone/hours data would come from each borough's own site, not this layer.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    },
+    "key": "ALASKACOUNTYOFFICES",
+    "api_host": "maps.commerce.alaska.gov"
+   }
   },
   "api.govinfo.gov": {
    "wall": "ROBOTS_DISALLOWED"
@@ -266,7 +286,26 @@
    "render": true
   },
   "aqcheckin.s3.amazonaws.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "none",
+    "name": "Amazon S3 bucket (owner unknown)",
+    "base_url": "https://aqcheckin.s3.amazonaws.com/",
+    "docs_url": "https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html",
+    "cost": "unknown",
+    "terms": "Private bucket; individual objects may be public only by exact key",
+    "notes": "Not a bot challenge: S3 returns AccessDenied XML (listing disabled / object not public). Owner/purpose not identifiable via search; nothing to route to.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 403,
+     "real_data": false
+    },
+    "key": "AQCHECKIN_S3_AMAZONAWS",
+    "api_host": "aqcheckin.s3.amazonaws.com"
+   }
   },
   "archive.org": {
    "render": true
@@ -323,7 +362,20 @@
    "wall": "LOGIN_REQUIRED"
   },
   "dictionary.cambridge.org": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "none",
+    "name": "Cambridge Dictionaries API (retired)",
+    "cost": "unknown",
+    "terms": "n/a",
+    "notes": "Former API host dictionary-api.cambridge.org now 301s to dictionary.cambridge.org; no current public/dev API found. Data licensing may exist by contact with Cambridge University Press (unverified).",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "key": "DICTIONARY_CAMBRIDGE",
+    "api_host": null
+   }
   },
   "digicat.se.com": {
    "wall": "REFUSED"
@@ -338,7 +390,27 @@
    "render": true
   },
   "ecfr.federalregister.gov": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "open_api",
+    "name": "eCFR API (legacy host superseded by www.ecfr.gov) + GovInfo eCFR bulk XML",
+    "base_url": "https://www.ecfr.gov/api/",
+    "docs_url": "https://www.ecfr.gov/developers/documentation/api/v1",
+    "cost": "free",
+    "terms": "Public domain; no key. Bulk alternative: https://www.govinfo.gov/bulkdata/ECFR (daily XML per title)",
+    "sample": "https://www.ecfr.gov/api/search/v1/results?query=%22small%20business%22&per_page=1",
+    "notes": "ecfr.federalregister.gov redirects to the Federal Register's own 'Request Access' page (unblock.federalregister.gov); the same data is open at www.ecfr.gov/api. Bulk XML: https://www.govinfo.gov/bulkdata/ECFR",
+    "auth": {
+     "kind": "none"
+    },
+    "key": "ECFR",
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    },
+    "api_host": "www.ecfr.gov"
+   }
   },
   "ecode360.com": {
    "wall": "LOGIN_REQUIRED"
@@ -368,7 +440,25 @@
    "wall": "ROBOTS_DISALLOWED"
   },
   "legiscan.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "enroll_free",
+    "name": "LegiScan Public API (pull)",
+    "base_url": "https://api.legiscan.com/",
+    "docs_url": "https://legiscan.com/legiscan",
+    "signup_url": "https://legiscan.com/legiscan",
+    "cost": "free tier",
+    "terms": "Free tier reported cut on 2026-10-01 to 10,000 queries/month at ~2 req/s; CC BY 4.0 attribution required; from 2026-11-01 keys that re-download unchanged datasets get banned. Figures come from a third-party pull request (legiscan.com blocks fetchers): confirm at signup",
+    "sample": "https://api.legiscan.com/?op=getStateList",
+    "notes": "Requires free LegiScan account login before key creation. Manual: api.legiscan.com/dl/LegiScan_API_User_Manual.pdf. 10k/2 req/s figures come from a downstream repo PR, not LegiScan's page (which 403s fetchers).",
+    "auth": {
+     "kind": "query",
+     "name": "key"
+    },
+    "checked": "2026-10-03",
+    "key": "LEGISCAN",
+    "api_host": "api.legiscan.com"
+   }
   },
   "legislation.nysenate.gov": {
    "render": true
@@ -433,7 +523,27 @@
    "wall": "LOGIN_REQUIRED"
   },
   "snuggymom.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "feed",
+    "name": "WordPress RSS feed + WP REST API",
+    "base_url": "https://snuggymom.com/feed/",
+    "docs_url": "https://developer.wordpress.org/rest-api/reference/posts/",
+    "cost": "free",
+    "terms": "Platform-default endpoints; no published terms; content copyright the site",
+    "sample": "https://snuggymom.com/wp-json/wp/v2/posts?per_page=10",
+    "notes": "WordPress blog (not Shopify -- /products.json is challenged 403). /feed/ and /wp-json/wp/v2/posts both 200 while pages challenge; WP JSON gives full content.rendered.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    },
+    "key": "SNUGGYMOM",
+    "api_host": "snuggymom.com"
+   }
   },
   "sourcetags.sensormatic.com": {
    "render": true
@@ -462,13 +572,60 @@
    "render": true
   },
   "us.rs-online.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "commercial",
+    "name": "RS e-procurement integration (web service API / PunchOut / cXML)",
+    "docs_url": "https://fr.rs-online.com/web/content/services/solutions-achat/rs-eprocurement",
+    "cost": "contract",
+    "terms": "Trade-account customers only; pricing per customer's commercial conditions",
+    "notes": "No public self-service product API or developer portal for RS/RS Americas found; datasheets on docs.rs-online.com are linkable PDFs, not an API.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "key": "RS_ONLINE",
+    "api_host": null
+   }
   },
   "webfiles.nycourts.gov": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "none",
+    "name": "NY Unified Court System file host (no API)",
+    "base_url": "https://webfiles.nycourts.gov/public/",
+    "cost": "unknown",
+    "terms": "Public court documents",
+    "notes": "The suggested alternative www.nycourts.gov is behind the same Cloudflare challenge. No UCS API/feed found for forms, handbooks, part rules. For decisions only: CourtListener (token) or NY Law Reporting Bureau -- different content.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 403,
+     "real_data": false
+    },
+    "key": "WEBFILES_NYCOURTS",
+    "api_host": "webfiles.nycourts.gov"
+   }
   },
   "www.acronymfinder.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "commercial",
+    "name": "Acronym Finder licensed web service (XML/SOAP)",
+    "docs_url": "https://www.acronymfinder.com/licensing.htm",
+    "signup_url": "https://www.acronymfinder.com/licensing.htm",
+    "cost": "contract",
+    "terms": "Fees based on number of users; custom/co-branded and unlimited licenses by quote",
+    "notes": "Licensing page itself 403s to fetchers; terms taken from search snippet of that page.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "key": "ACRONYMFINDER",
+    "api_host": null
+   }
   },
   "www.adiglobaldistribution.us": {
    "render": true
@@ -496,7 +653,23 @@
    "wall": "ROBOTS_DISALLOWED"
   },
   "www.arcat.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "none",
+    "name": "ARCAT official MCP server",
+    "base_url": "https://mcp.arcat.com/mcp",
+    "docs_url": "https://www.pulsemcp.com/servers/arcat",
+    "cost": "free tier",
+    "terms": "Official (com.arcat in MCP registry, owner of arcat.com); tools: browse_csi_sections, search_manufacturers, get_manufacturer, search_products",
+    "notes": "ARCAT runs an official MCP server (mcp.arcat.com/mcp, registry com.arcat) that needs an API key, but no page says where to get one and directories report ~2% uptime (2026-09). Recheck later.",
+    "auth": {
+     "kind": "header",
+     "name": "API key (header name not documented)"
+    },
+    "checked": "2026-10-03",
+    "key": "ARCAT",
+    "api_host": "mcp.arcat.com"
+   }
   },
   "www.arista.com": {
    "item_patterns": [
@@ -504,7 +677,27 @@
    ]
   },
   "www.arlingtonma.gov": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "feed",
+    "name": "Town of Arlington RSS feeds (Vision CMS) + Arlington GIS Data Hub DCAT",
+    "base_url": "https://www.arlingtonma.gov/Home/Components/RssFeeds/RssFeed/View",
+    "docs_url": "https://www.arlingtonma.gov/i-want-to/advanced-components/list-all-rss-feed",
+    "cost": "free",
+    "terms": "Public municipal content; no published limits",
+    "sample": "https://www.arlingtonma.gov/Home/Components/RssFeeds/RssFeed/View?ctID=5",
+    "notes": "RSS served unchallenged on the same host (ctID=5 = News; other ctIDs for calendar/meetings listed on the docs page). GIS open data: gis-arlingtonma.opendata.arcgis.com/api/feed/dcat-us/1.1.json tested 200.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    },
+    "key": "ARLINGTONMA",
+    "api_host": "www.arlingtonma.gov"
+   }
   },
   "www.arlingtontx.gov": {
    "render": true
@@ -523,7 +716,23 @@
    "render": true
   },
   "www.bhphotovideo.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "enroll_free",
+    "name": "B&H Affiliate Program (MyAffiliateProgram portal)",
+    "base_url": "https://affiliates.bhphotovideo.com/app/",
+    "docs_url": "https://www.bhphotovideo.com/find/shared/affiliates.jsp",
+    "signup_url": "https://www.bhphotovideo.com/find/shared/affiliates.jsp",
+    "cost": "free",
+    "terms": "Application reviewed by B&H; the affiliate agreement governs use. UNVERIFIED: a product data feed for affiliates is reported only by third-party directories, so confirm it exists before relying on it",
+    "notes": "No public product API found. A product data feed for affiliates is claimed only by third-party directories -- unverified. Otherwise route is none.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "key": "BHPHOTOVIDEO",
+    "api_host": "affiliates.bhphotovideo.com"
+   }
   },
   "www.biamp.com": {
    "item_patterns": [
@@ -544,7 +753,25 @@
    ]
   },
   "www.britannica.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "enroll_free",
+    "name": "Britannica Syndication API",
+    "base_url": "https://syndication.api.eb.com/production/",
+    "docs_url": "https://encyclopaediaapi.com/products/json",
+    "signup_url": "https://encyclopaediaapi.com/register/index",
+    "cost": "free tier",
+    "terms": "Free for non-commercial use, 1,000 queries/day per key; commercial terms case by case. The developer site's footer is dated 2022, so check it is still current",
+    "sample": "https://syndication.api.eb.com/production/articles?articleTypeId=31&lastUpdated=2020-10-01",
+    "notes": "Evaluation key per product ('Article Type'); /article/{id}/xml returns article XML. Developer site footer dated 2022 -- may be stale; commercial syndication via form01.britannica.com/help/syndicationform.html.",
+    "auth": {
+     "kind": "header",
+     "name": "x-api-key"
+    },
+    "checked": "2026-10-03",
+    "key": "BRITANNICA",
+    "api_host": "syndication.api.eb.com"
+   }
   },
   "www.capitol.hawaii.gov": {
    "render": true
@@ -594,7 +821,28 @@
    "render": true
   },
   "www.digikey.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "enroll_oauth",
+    "name": "DigiKey Product Information API v4",
+    "base_url": "https://api.digikey.com/products/v4/",
+    "docs_url": "https://developer.digikey.com/products/product-information-v4/productsearch",
+    "signup_url": "https://developer.digikey.com/",
+    "cost": "free",
+    "terms": "Token URL https://api.digikey.com/v1/oauth2/token (10-min tokens); 120 req/min, 1,000 req/day; API User Agreement",
+    "sample": "https://api.digikey.com/products/v4/search/P5555-ND/productdetails",
+    "notes": "Register, create an organization app, subscribe it to Product Information v4; sandbox at sandbox-api.digikey.com.",
+    "auth": {
+     "kind": "oauth2_client_credentials",
+     "token_url": "https://api.digikey.com/v1/oauth2/token",
+     "headers": {
+      "X-DIGIKEY-Client-Id": "{client_id}"
+     }
+    },
+    "checked": "2026-10-03",
+    "key": "DIGIKEY",
+    "api_host": "api.digikey.com"
+   }
   },
   "www.discoverpuertorico.com": {
    "render": true
@@ -603,22 +851,100 @@
    "render": true
   },
   "www.dmp.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "alternative",
+    "name": "DMP literature CDN (assets.dmp.com)",
+    "base_url": "https://assets.dmp.com/assets/",
+    "cost": "free",
+    "terms": "DMP-copyrighted documents; no published reuse terms",
+    "sample": "https://assets.dmp.com/assets/LT-1360.pdf",
+    "notes": "No public DMP API (Virtual Keypad/Dealer Admin integrations are partner-only). Product sheets/manuals are served unchallenged from assets.dmp.com by document number; pages on www.dmp.com are not.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    },
+    "key": "DMP",
+    "api_host": "assets.dmp.com"
+   }
   },
   "www.drugs.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "alternative",
+    "name": "DailyMed SPL API (NLM) + openFDA + RxNav/RxNorm",
+    "base_url": "https://dailymed.nlm.nih.gov/dailymed/services/v2/",
+    "docs_url": "https://dailymed.nlm.nih.gov/dailymed/app-support-web-services.cfm",
+    "cost": "free",
+    "terms": "Public domain US gov data; openFDA no-key 240 req/min & 1,000/day per IP; RxNav asks <=20 req/s",
+    "sample": "https://dailymed.nlm.nih.gov/dailymed/services/v2/spls.json?drug_name=lipitor&pagesize=1",
+    "notes": "Drugs.com has no public API (content licensed from Cerner Multum etc.). Also tested 200: api.fda.gov/drug/label.json and rxnav.nlm.nih.gov/REST/drugs.json. Label text = FDA source, not Drugs.com's consumer prose.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    },
+    "key": "DRUGS",
+    "api_host": "dailymed.nlm.nih.gov"
+   }
   },
   "www.dsautomobiles.com": {
    "render": true
   },
   "www.ecfr.gov": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "open_api",
+    "name": "eCFR API (versioner/search/admin)",
+    "base_url": "https://www.ecfr.gov/api/",
+    "docs_url": "https://www.ecfr.gov/developers/documentation/api/v1",
+    "cost": "free",
+    "terms": "US government public domain; no key; no published hard rate limit (be polite); eCFR is editorial, not the official legal edition",
+    "sample": "https://www.ecfr.gov/api/versioner/v1/titles.json",
+    "notes": "Tested /api/versioner/v1/titles.json and /api/search/v1/results (both 200 JSON) from this machine while the HTML pages challenge; full-text XML via /api/versioner/v1/full/{date}/title-N.xml.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    },
+    "key": "ECFR",
+    "api_host": "www.ecfr.gov"
+   }
   },
   "www.edwardsfiresafety.com": {
    "listing": "https://www.edwardsfiresafety.com/products"
   },
   "www.essentialbuildstore.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "none",
+    "name": "WooCommerce Store API (platform default)",
+    "base_url": "https://www.essentialbuildstore.com/wp-json/wc/store/v1/",
+    "docs_url": "https://developer.woocommerce.com/docs/apis/store-api/",
+    "cost": "free",
+    "terms": "Platform-default public endpoint; no published site terms for it",
+    "notes": "WooCommerce site; Cloudflare challenges every path, including its Store API and product feed.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 403,
+     "real_data": false
+    },
+    "key": "ESSENTIALBUILDSTORE",
+    "api_host": "www.essentialbuildstore.com"
+   }
   },
   "www.findhelp.org": {
    "wall": "ROBOTS_DISALLOWED"
@@ -640,7 +966,22 @@
    "wall": "ROBOTS_DISALLOWED"
   },
   "www.guitarcenter.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "enroll_free",
+    "name": "Guitar Center affiliate program (CJ Affiliate / Impact product feed)",
+    "docs_url": "https://advertisedev.guitarcenter.com/",
+    "signup_url": "https://signup.cj.com/member/signup/publisher/",
+    "cost": "free",
+    "terms": "Advertiser approval required; feed use limited to affiliate promotion. UNVERIFIED: third-party sources disagree on the network (CJ vs Impact) and no official page confirms a product feed",
+    "notes": "No public API. Third-party sources disagree on network (CJ vs Impact); feed availability not confirmed from an official page.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "key": "GUITARCENTER",
+    "api_host": null
+   }
   },
   "www.hidglobal.com": {
    "render": true
@@ -691,7 +1032,25 @@
    ]
   },
   "www.merriam-webster.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "enroll_free",
+    "name": "Merriam-Webster Dictionary API",
+    "base_url": "https://www.dictionaryapi.com/api/v3/references/",
+    "docs_url": "https://dictionaryapi.com/products/json",
+    "signup_url": "https://www.dictionaryapi.com/register/index",
+    "cost": "free tier",
+    "terms": "Free non-commercial only, 1,000 queries/day per key, max 2 reference APIs; MW logo required; commercial use needs a license",
+    "sample": "https://www.dictionaryapi.com/api/v3/references/collegiate/json/voluminous",
+    "notes": "JSON only; two keys issued at registration.",
+    "auth": {
+     "kind": "query",
+     "name": "key"
+    },
+    "checked": "2026-10-03",
+    "key": "MERRIAM_WEBSTER",
+    "api_host": "www.dictionaryapi.com"
+   }
   },
   "www.micron.com": {
    "item_patterns": [
@@ -725,7 +1084,28 @@
    "render": true
   },
   "www.nytimes.com": {
-   "wall": "CHALLENGE_WALL"
+   "wall": "CHALLENGE_WALL",
+   "access": {
+    "route": "feed",
+    "name": "NYT RSS feeds (plus NYT Developer APIs with free key)",
+    "base_url": "https://rss.nytimes.com/services/xml/rss/nyt/",
+    "docs_url": "https://www.nytimes.com/rss",
+    "signup_url": "https://developer.nytimes.com/get-started",
+    "cost": "free",
+    "terms": "RSS free for personal/non-commercial use with attribution; Developer APIs (Article Search, Top Stories, etc.) need a free key (api-key query param), ~5 req/min, 500/day",
+    "sample": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
+    "notes": "RSS gives headline, summary and link only. Full-text search needs the free NYT Developer API key (api-key query param) from https://developer.nytimes.com/get-started; its rate limits were not re-checked.",
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-03",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    },
+    "key": "NYTIMES",
+    "api_host": "rss.nytimes.com"
+   }
   },
   "www.panduit.com": {
    "listing": "https://www.panduit.com/en/products.html",

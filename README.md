@@ -229,6 +229,52 @@ and the lessons generalise:
   the new pace, and an offer to use a bulk download. `hold(host, reason='unblock requested <date>')` then keeps
   everyone off until `hold(host, lift=true)`. A hold set that way has no end date, so Scout never probes it.
 
+## Official routes and enrollment
+
+When a site walls Scout, the best next step is usually the site's own front door: an open API, a bulk download, a
+feed, or an API a person signs up for. Scout keeps that per site as its **access** entry.
+
+- **No signup needed** (`open_api`, `bulk`, `feed`, `public_json`, `alternative`): the wall's first next step is that
+  route, as a ready `reach(...)`.
+- **A person must enroll** (`enroll_free`, `enroll_paid`, `enroll_oauth`, `commercial`): Scout files an **enrollment
+  request** the first time the wall is hit. `enroll(action='list')` is the checklist. Each entry says where to sign
+  up, what it costs, the terms, and where the key goes.
+- **No route known yet:** the error says so, and a big model looks for one (the API, developer program or bulk
+  download) and records it with `enroll(action='request', …)`. Say you need LexisNexis but haven't set Scout up for
+  it: `/scout https://www.lexisnexis.com/...` hits the login, Claude records LexisNexis's developer program, and it
+  lands on the checklist.
+- **Updating Scout:** `/scout-update` works through the checklist with you, along with failing recipes, holds waiting
+  on a site's answer, and recent failures. When you've put a key in place, `enroll(action='done')` tests it on the
+  API's sample url before marking the site enrolled. From then on recipes call the API with no key in them; Scout adds
+  it.
+
+**Keys never pass through a tool.** They live in `SCOUT_KEY_<NAME>` environment variables or in
+`~/.config/scout-mcp/keys.env` (`NAME=value`). Scout ignores that file unless its mode is 600. A key is added at fetch
+time, only to its own API's host, and scrubbed by value from every page, url and error Scout returns. OAuth client
+credentials (`NAME_ID` and `NAME_SECRET`) are exchanged for a token, which is cached until it expires.
+
+The book ships with the official routes for 21 sites that challenged Scout, researched and tested on 2026-10-03:
+
+| Site | Official route | Signup | Tested from a datacenter address |
+|---|---|---|---|
+| www.ecfr.gov, ecfr.federalregister.gov | eCFR API (+ GovInfo bulk XML) | none | 200 JSON, while the pages challenge |
+| www.drugs.com | DailyMed, openFDA and RxNav (the FDA's own label data) | none | 200 JSON |
+| www.nytimes.com | RSS feeds (full text needs the free Developer API key) | none | 200 RSS |
+| www.arlingtonma.gov | the town's RSS feeds and GIS data hub | none | 200 RSS, 200 JSON |
+| snuggymom.com | WordPress RSS and REST API | none | 200 JSON |
+| www.dmp.com | product literature on assets.dmp.com | none | 200 PDF |
+| alaskacountyoffices.org | Alaska's state community database (ArcGIS) | none | 200 JSON |
+| legiscan.com | LegiScan Public API | free key | — |
+| www.merriam-webster.com | Merriam-Webster Dictionary API | free key (non-commercial) | — |
+| www.britannica.com | Britannica Syndication API | free key (non-commercial) | — |
+| www.digikey.com | DigiKey Product Information v4 | free OAuth app | — |
+| www.bhphotovideo.com, www.guitarcenter.com | affiliate programs (product feeds unverified) | free application | — |
+| us.rs-online.com, www.acronymfinder.com | licensed web services | contract | — |
+| webfiles.nycourts.gov, dictionary.cambridge.org, www.arcat.com, www.essentialbuildstore.com, aqcheckin.s3.amazonaws.com | none found: no API, a retired one, an unreachable one, or a private bucket | — | the reason is recorded, so no one searches again |
+
+Several "challenged" sites serve their own APIs and feeds without any challenge. A wall in front of the pages is
+often not a wall in front of the data.
+
 ## Errors that say what to do next
 
 When Scout fails, it returns an error `code`, a `message`, and `next_steps` written as concrete tool calls, plus the
@@ -256,6 +302,7 @@ When Scout fails, it returns an error `code`, a `message`, and `next_steps` writ
 | `compile(name, steps, examples, …)` | big model | tests a recipe and saves it, returns the small-model card |
 | `moves(action, …)` | big model | lists, proposes or retires moves |
 | `hold(host, reason?, lift?, min_interval?)` | big model | keeps every agent off a site (or lets them back), slows Scout's pace there |
+| `enroll(action, host?, info?, note?)` | big model | records a site's official route, and lists, tests and closes enrollment requests |
 | `memory(host?)` | big model | reader order, routes, moves and recent failures for a host |
 | `recipes(host?)` | both | compiled recipes with scores, status and cards |
 | `run(recipe, input?)` | **small model** | runs a recipe, returns one RESULT line |
@@ -269,6 +316,7 @@ Give the small model only `run`, or the CLI. One tool means it has nothing to ch
 | `SCOUT_DB` | `~/.local/share/scout-mcp/scout.db` |
 | `SCOUT_USER_AGENT` | `ScoutMCP/<version> (+https://github.com/sireggserroneous/scout-mcp)` |
 | `SCOUT_MIN_INTERVAL` | `1.0` seconds between requests to one host |
+| `SCOUT_KEYS_FILE` | `~/.config/scout-mcp/keys.env` (mode 600), next to `SCOUT_KEY_<NAME>` env vars |
 | `FIRECRAWL_URL`, `FIRECRAWL_API_KEY`, `CRAWL4AI_URL`, `CRAWL4AI_TOKEN` | unset |
 
 ## Develop

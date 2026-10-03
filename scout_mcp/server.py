@@ -55,6 +55,19 @@ async def hold(host: str, reason: str = "", lift: bool = False, min_interval: fl
 
 
 @mcp.tool()
+async def enroll(action: str = "list", host: str = "", info: dict | None = None, note: str = "", include_all: bool = False) -> dict:
+    """Official routes and the enrollments they need: the checklist for whoever updates Scout.
+    action=list: open requests, each with a `todo` that says where to sign up, what it costs, and where the key goes.
+    action=request host info: record a site's official route. info = {route: open_api|bulk|feed|public_json|alternative
+      (no signup) or enroll_free|enroll_paid|enroll_oauth|commercial (a person must enroll), name, signup_url, docs_url,
+      base_url, auth: {kind: none|query|header|bearer|oauth2_client_credentials, name, token_url, headers}, cost, terms,
+      sample (a url that returns the data; leave the key out)}. Keyed routes become an enrollment request.
+    action=applied (signed up, waiting on approval) | done (Scout tests the key on the sample, then marks enrolled) | decline.
+    Keys are never passed here: they go in the keys file or SCOUT_KEY_<NAME> env vars."""
+    return await asyncio.to_thread(S.enroll, action, host, info, note, include_all)
+
+
+@mcp.tool()
 async def moves(action: str = "list", kind: str = "", scope: str = "*", spec: dict | None = None, id: int = 0,
                 note: str = "", host: str = "") -> dict:
     """The moves register: rewrite rules Scout tries where its built-in moves fail, each scored (wins+1)/(tries+2) on

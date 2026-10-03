@@ -19,8 +19,15 @@ order, for at most three rounds:
 - A `moves(action='propose', ...)` step: propose the move only if you have evidence it will work, such as a sub-page
   you saw in `site_map`. Then `reach` again.
 - A want step: loosen the regex, or read `page.closest.markdown` and use the words the page actually uses.
-- `ROBOTS_DISALLOWED`, `LOGIN_REQUIRED` or `CHALLENGE_WALL`: look for the site's API, a feed, or the same
-  information on another site.
+- `ROBOTS_DISALLOWED`, `LOGIN_REQUIRED`, `REFUSED` or `CHALLENGE_WALL`: the first next step is the site's official
+  route when Scout knows one. An open API or bulk download: reach it. One that needs signing up: Scout has filed an
+  enrollment request, so tell the user it is on the `/scout-update` checklist.
+- If Scout knows no official route (the last next step says so), look for one yourself: the site's API, developer
+  program, bulk download or data feed. LexisNexis, for example, has a developer program a person applies to. Record
+  what you find with `enroll` `action='request'`, with the route, signup url, base url, auth kind, cost, terms and a
+  sample url. A keyed route becomes an enrollment request for `/scout-update`.
+- `BLOCKED`: the site throttled us. Scout holds the host and will probe it later. Tell the user who the error says to
+  email.
 
 ## 2. Compile it for small models
 

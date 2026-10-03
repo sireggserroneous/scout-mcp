@@ -101,7 +101,14 @@ def _seed(c):
         c.execute("INSERT OR IGNORE INTO recipe (name, about, input, steps, examples, updated) VALUES (?, ?, ?, ?, ?, ?)",
                   (r["name"], r.get("about", ""), r.get("input", ""), json.dumps(r["steps"]), json.dumps(r.get("examples", [])), time.time()))
     for h, route in (book.get("hosts") or {}).items():
-        c.execute("INSERT OR IGNORE INTO host (host, route, updated) VALUES (?, ?, ?)", (h, json.dumps(route), time.time()))
+        r = c.execute("SELECT route FROM host WHERE host=?", (h,)).fetchone()
+        if not r:
+            c.execute("INSERT INTO host (host, route, updated) VALUES (?, ?, ?)", (h, json.dumps(route), time.time()))
+            continue
+        have = json.loads(r["route"])                 # an upgrade adds what the book knows; what you learned stays
+        new = {**route, **have}
+        if new != have:
+            c.execute("UPDATE host SET route=? WHERE host=?", (json.dumps(new), h))
 
 
 def memory(host):
@@ -369,7 +376,9 @@ def _polite(url):
 def _convert(raw, ctype, url):
     """Bytes -> {markdown, title, links, shell}. PDFs read by their text layer."""
     if "pdf" in (ctype or "").lower() or raw[:5] == b"%PDF-":
+        import logging
         from pypdf import PdfReader
+        logging.getLogger("pypdf").setLevel(logging.ERROR)     # font-encoding chatter, not errors
         rd = PdfReader(io.BytesIO(raw))
         md = "\n\n".join(t for t in ((pg.extract_text() or "").strip() for pg in rd.pages[:400]) if t)
         title = (rd.metadata.title if rd.metadata and rd.metadata.title else url.rsplit("/", 1)[-1])
@@ -395,20 +404,25 @@ def _convert(raw, ctype, url):
 
 
 def _direct(url, timeout):
+    asked, (url, extra, secrets) = url, _auth(url)
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=timeout) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={**HEADERS, **extra}), timeout=timeout) as r:
             raw, ctype = r.read(MAX_BYTES), r.headers.get("Content-Type", "")
-            final = r.geturl()
+            final = _scrub(r.geturl(), secrets) if secrets else r.geturl()
     except urllib.error.HTTPError as e:
         try:
-            body = e.read(20_000).decode("utf-8", "replace")
+            body = _scrub(e.read(20_000).decode("utf-8", "replace"), secrets)
         except Exception:  # noqa: BLE001
             body = ""
         raise Status(e.code, e.headers.get("Retry-After") if e.headers else None, bool(_CHALLENGE.search(body)),
                      _blocked(body), " ".join(re.sub(r"<[^>]+>", " ", body).split())[:600]) from None
     if raw[:2] == b"\x1f\x8b":
         raw = gzip.decompress(raw)
-    return {**_convert(raw, ctype, final), "final_url": final}
+    page = {**_convert(raw, ctype, final), "final_url": final if not secrets else asked}
+    if secrets:
+        page["markdown"] = _scrub(page["markdown"], secrets)
+        page["links"] = [{**l, "url": _scrub(l["url"], secrets)} for l in page["links"]]
+    return page
 
 
 def _post(url, payload, headers, timeout):
@@ -651,6 +665,213 @@ def reach(url, want="", full=False, _depth=0, _links=False):
     return out
 
 
+# ── access: a site's official route, and the enrollment it needs ────────────────────────────────────────────────────
+# When a site walls Scout, the best next move is usually its own front door: an open API, a bulk download, or an API
+# a person enrolls in. Scout keeps that per site (route['access']). An access that needs a key files an enrollment
+# request, and the open requests are the checklist for whoever updates Scout ("sign up here, put the key there").
+# Keys live only in the environment (SCOUT_KEY_<NAME>) or the keys file (NAME=value, mode 600). They are applied at
+# fetch time to the API's own host and scrubbed, by value, from everything Scout returns.
+KEYS_FILE = Path(os.environ.get("SCOUT_KEYS_FILE") or Path.home() / ".config/scout-mcp/keys.env")
+ROUTES = ("open_api", "bulk", "feed", "public_json", "enroll_free", "enroll_paid", "enroll_oauth", "commercial", "alternative", "none")
+NEEDS_KEY = ("enroll_free", "enroll_paid", "enroll_oauth", "commercial")
+_TOKENS, _APIS = {}, [0.0, {}]
+
+
+def _keyname(name):
+    return re.sub(r"[^A-Z0-9]+", "_", (name or "").upper()).strip("_")
+
+
+def keys_file_state():
+    try:
+        return "too open: chmod 600 " + str(KEYS_FILE) if KEYS_FILE.stat().st_mode & 0o077 else "ok"
+    except FileNotFoundError:
+        return "missing"
+
+
+def _keys():
+    out = {k[len("SCOUT_KEY_"):]: v for k, v in os.environ.items() if k.startswith("SCOUT_KEY_") and v}
+    if keys_file_state() == "ok":            # a keys file others can read is ignored, not trusted
+        for line in KEYS_FILE.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                out.setdefault(_keyname(k).removeprefix("SCOUT_KEY_"), v.strip().strip("'\""))
+    return out
+
+
+def _have_key(a):
+    k = _keys()
+    return bool(k.get(a["key"] + "_ID") and k.get(a["key"] + "_SECRET")) if a["auth"]["kind"] == "oauth2_client_credentials" \
+        else bool(k.get(a["key"]))
+
+
+def access(host):
+    """The site's official route, if one is known (its own entry, or the www/bare twin's)."""
+    h = _host(host if "://" in host else "https://" + host)
+    for x in (h, h.removeprefix("www."), "www." + h.removeprefix("www.")):
+        a = memory(x)["route"].get("access")
+        if a:
+            return a
+    return None
+
+
+def _api_access(host):
+    """The access whose API lives on `host` (api.legiscan.com belongs to legiscan.com's access)."""
+    if time.time() - _APIS[0] > 30:
+        try:
+            with _db() as c:
+                rows = c.execute("""SELECT route FROM host WHERE route LIKE '%"access"%'""").fetchall()
+            _APIS[1] = {a["api_host"]: a for a in (json.loads(r["route"]).get("access") for r in rows) if a and a.get("api_host")}
+        except sqlite3.Error:
+            _APIS[1] = {}
+        _APIS[0] = time.time()
+    return _APIS[1].get(host)
+
+
+def _token(a, cid, secret):
+    hit = _TOKENS.get(a["key"])
+    if hit and hit[0] > time.time() + 60:
+        return hit[1]
+    body = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": cid, "client_secret": secret}).encode()
+    req = urllib.request.Request(a["auth"]["token_url"], data=body, headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        d = json.loads(r.read())
+    _TOKENS[a["key"]] = (time.time() + float(d.get("expires_in") or 600), d["access_token"])
+    return d["access_token"]
+
+
+def _auth(url):
+    """(url, extra headers, secrets to scrub) for a request to an enrolled API. Nothing for any other host."""
+    a = _api_access(_host(url))
+    if not a or a["auth"]["kind"] in ("none", None):
+        return url, {}, []
+    k, kind, name = _keys(), a["auth"]["kind"], a["auth"].get("name")
+    key, extra, secrets = k.get(a["key"]), {}, []
+    if kind == "oauth2_client_credentials":
+        cid, sec = k.get(a["key"] + "_ID"), k.get(a["key"] + "_SECRET")
+        if cid and sec:
+            tok = _token(a, cid, sec)
+            extra = {"Authorization": f"Bearer {tok}", **{h: v.replace("{client_id}", cid) for h, v in (a["auth"].get("headers") or {}).items()}}
+            secrets = [tok, cid, sec]
+        return url, extra, secrets
+    if not key:
+        return url, {}, []
+    if kind == "query":
+        p = urllib.parse.urlsplit(url)
+        q = urllib.parse.urlencode(urllib.parse.parse_qsl(p.query) + [(name or "key", key)])
+        url = urllib.parse.urlunsplit(p._replace(query=q))
+    elif kind == "header":
+        extra = {name or "X-Api-Key": key}
+    elif kind == "bearer":
+        extra = {"Authorization": f"Bearer {key}"}
+    return url, extra, [key]
+
+
+def _scrub(text, secrets):
+    for sec in secrets:
+        if sec:
+            text = text.replace(sec, "[key]").replace(urllib.parse.quote(sec, safe=""), "[key]")
+    return text
+
+
+def _ensure_enroll(c):
+    c.execute("""CREATE TABLE IF NOT EXISTS enroll (host TEXT PRIMARY KEY, status TEXT NOT NULL, reason TEXT, note TEXT,
+                 asked REAL, updated REAL)""")
+
+
+def _todo(host, a, status):
+    if status == "enrolled":
+        return f"Enrolled. Scout adds the credential to requests for {a.get('api_host')}; recipes stay keyless."
+    if a["route"] not in NEEDS_KEY:
+        return f"No signup needed: use {a.get('name')} at {a.get('sample') or a.get('base_url')}."
+    put = (f"{a['key']}_ID=<client id> and {a['key']}_SECRET=<client secret>" if a["auth"]["kind"] == "oauth2_client_credentials"
+           else f"{a['key']}=<your key>")
+    verb = "Ask for a license to" if a["route"] == "commercial" else "Sign up for"
+    return (f"{verb} {a.get('name')} at {a.get('signup_url') or a.get('docs_url')} ({a.get('cost') or 'cost unknown'}). "
+            f"Put {put} in {KEYS_FILE} (chmod 600) or set the SCOUT_KEY_ env vars, then call "
+            f"enroll(action='done', host='{host}'). Terms: {(a.get('terms') or 'read them at signup').rstrip('. ')}.")
+
+
+def enroll(action="list", host="", info=None, note="", include_all=False):
+    """Enrollment requests: what a person must sign up for so Scout can use a site's official API.
+    action: list | request (info = the access) | applied (signed up, waiting on approval) | done (verify the key) | decline."""
+    h = _host(host if "://" in host else "https://" + host) if host else ""
+    with _db() as c:
+        _ensure_enroll(c)
+        if action == "list":
+            rows = c.execute("SELECT * FROM enroll ORDER BY asked").fetchall()
+            out = []
+            for r in rows:
+                if not include_all and r["status"] in ("enrolled", "declined"):
+                    continue
+                a = access(r["host"]) or {}
+                out.append({"host": r["host"], "status": r["status"], "why": r["reason"], "note": r["note"], "name": a.get("name"),
+                            "cost": a.get("cost"), "todo": _todo(r["host"], a, r["status"]) if a else "no access recorded"})
+            return {"enrollments": out, "keys_file": f"{KEYS_FILE} ({keys_file_state()})"}
+        if not h:
+            return {"ok": False, "error": {"code": "BAD_ENROLL", "message": "give the site's host"}}
+        if action == "request":
+            a = dict(info or {})
+            if a.get("route") not in ROUTES:
+                return {"ok": False, "error": {"code": "BAD_ENROLL", "message": f"info.route must be one of {', '.join(ROUTES)}"}}
+            if a["route"] in NEEDS_KEY and not (a.get("signup_url") or a.get("docs_url")):
+                return {"ok": False, "error": {"code": "BAD_ENROLL", "message": "an enrollment needs info.signup_url (where a person applies)"}}
+            a["auth"] = {"kind": "none", **(a.get("auth") or {})}
+            a["key"] = _keyname(a.get("key") or re.sub(r"^(www|us|en|api)\.", "", h).rsplit(".", 1)[0])   # named after the site
+            a["api_host"] = a.get("api_host") or (_host(a["base_url"]) if a.get("base_url") else None)
+            if a.get("sample"):
+                a["sample"] = re.sub(r"([?&])[^=&]+=(?:KEY|\{KEY\}|<KEY>|YOUR_?KEY|\{key\}|<key>)(?=&|$)", r"\1", a["sample"]).rstrip("?&")
+            learn(h, "access", a)
+            _APIS[0] = 0
+            if a["route"] in NEEDS_KEY:
+                c.execute("""INSERT INTO enroll (host, status, reason, note, asked, updated) VALUES (?, 'needed', ?, ?, ?, ?)
+                             ON CONFLICT(host) DO UPDATE SET reason=excluded.reason, note=COALESCE(excluded.note, enroll.note),
+                             updated=excluded.updated""", (h, note or "requested", note or None, time.time(), time.time()))
+            st = (c.execute("SELECT status FROM enroll WHERE host=?", (h,)).fetchone() or {"status": "no signup needed"})["status"]
+            return {"ok": True, "host": h, "status": st, "access": a, "todo": _todo(h, a, st)}
+        if action in ("applied", "decline"):
+            st = {"applied": "requested", "decline": "declined"}[action]
+            n = c.execute("UPDATE enroll SET status=?, note=?, updated=? WHERE host=?", (st, note or None, time.time(), h)).rowcount
+            return {"ok": bool(n), "host": h, "status": st}
+        if action == "done":
+            a = access(h)
+            if not a:
+                return {"ok": False, "error": {"code": "NO_ACCESS", "message": f"no official route recorded for {h}"}}
+            if not _have_key(a):
+                return {"ok": False, "error": {"code": "NO_KEY", "message": f"no credential found for {a['key']}. Keys file: {KEYS_FILE} ({keys_file_state()})",
+                                               "next_steps": [_todo(h, a, "needed")]}}
+            try:
+                page = _direct(a["sample"], 30)
+                verdict = judge(page)
+            except Exception as e:  # noqa: BLE001
+                verdict = _outcome(e)
+            if verdict != "ok":
+                return {"ok": False, "error": {"code": "KEY_TEST_FAILED", "message": f"{a.get('name')} sample answered {verdict} with the key",
+                                               "next_steps": ["check the key and the auth kind in the access entry; the provider may still be approving it"]}}
+            c.execute("UPDATE enroll SET status='enrolled', updated=? WHERE host=?", (time.time(), h))
+            return {"ok": True, "host": h, "status": "enrolled", "todo": _todo(h, a, "enrolled")}
+    return {"ok": False, "error": {"code": "BAD_ENROLL", "message": "action is list | request | applied | done | decline"}}
+
+
+def _access_steps(host, code):
+    """The official route as the first next step when a site walls Scout; files an enrollment when it needs one."""
+    a = access(host)
+    if not a:
+        return []
+    if a["route"] == "none":
+        return [f"No official route exists for {host} (checked {a.get('checked') or 'earlier'}): {a.get('notes') or a.get('terms') or ''}".rstrip(": ")]
+    if a["route"] in NEEDS_KEY:
+        if _have_key(a):
+            return [f"Use {a.get('name')} (enrolled; Scout adds the credential): reach('{a.get('sample') or a.get('base_url')}')"]
+        with _db() as c:
+            _ensure_enroll(c)
+            c.execute("INSERT OR IGNORE INTO enroll (host, status, reason, asked, updated) VALUES (?, 'needed', ?, ?, ?)",
+                      (host, code, time.time(), time.time()))
+        return [f"{host}'s official route is {a.get('name')}, which needs a person to enroll ({a.get('cost') or 'cost unknown'}): "
+                f"{a.get('signup_url') or a.get('docs_url')}. Filed as an enrollment request; enroll(action='list') is the checklist."]
+    return [f"Use the site's official route, {a.get('name')} ({a['route'].replace('_', ' ')}): reach('{a.get('sample') or a.get('base_url')}')"
+            + (f". Terms: {a['terms']}" if a.get("terms") else "")]
+
+
 # ── actionable errors: what failed, why, and the next call that could fix it ─────────────────────────────────────────
 _PRIORITY = ["robots_disallowed", "blocked", "rate_limited", "challenge", "refused", "login_wall", "not_found", "error_page",
              "js_shell", "thin", "empty", "want_miss", "tls", "network", "server_error", "reader_missing", "http_error"]
@@ -734,6 +955,13 @@ def diagnose(url, want, tried, best=None):
         "http_error": ("HTTP_ERROR", f"{host} answered HTTP {status}.", [sitemap]),
     }
     code, message, steps = T.get(first, ("UNKNOWN", "No reader produced good information.", [sitemap]))
+    if code in ("CHALLENGE_WALL", "REFUSED", "LOGIN_REQUIRED", "BLOCKED", "ROBOTS_DISALLOWED", "JS_SHELL", "THIN_CONTENT"):
+        steps = _access_steps(host, code) + steps
+        if not access(host) and code != "BLOCKED":
+            steps = steps + [f"No official route is recorded for {host}. Look for its API, developer program or bulk download, "
+                             f"then record it: enroll(action='request', host='{host}', info={{'route': 'enroll_free', 'name': ..., "
+                             "'signup_url': ..., 'base_url': ..., 'auth': {'kind': 'query', 'name': 'key'}, 'cost': ..., 'sample': ...}}). "
+                             "Use route 'open_api' (or bulk, feed, alternative) when no signup is needed."]
     return {"code": code, "message": message, "next_steps": steps,
             "learned": f"logged under {host}; readers that failed there go to the back of its order for {DEAD_TTL // 3600} h. recipe('{host}') shows it"}
 
@@ -1072,9 +1300,17 @@ def scout(url, want="", full=False):
 
 def recipe(host=""):
     if not host:
-        return {"recent_failures": failures(limit=50), "moves": moves(include_dead=True), "readers": readers(), "db": str(DB_PATH)}
+        with _db() as c:
+            rows = c.execute("""SELECT host, route FROM host WHERE route LIKE '%"hold"%'""").fetchall()
+        holds = [{"host": r["host"], **json.loads(r["route"])["hold"]} for r in rows if json.loads(r["route"]).get("hold")]
+        return {"holds": holds, "open_enrollments": len(enroll()["enrollments"]), "recent_failures": failures(limit=50),
+                "moves": moves(include_dead=True), "readers": readers(), "db": str(DB_PATH)}
     host = _host(host if "://" in host else "https://" + host)
-    return {"host": host, **memory(host), "order": order(host), "moves": moves(host=host), "recent_failures": failures(host, 10)}
+    with _db() as c:
+        _ensure_enroll(c)
+        e = c.execute("SELECT status, reason, note FROM enroll WHERE host=?", (host,)).fetchone()
+    return {"host": host, **memory(host), "order": order(host), "moves": moves(host=host), "recent_failures": failures(host, 10),
+            "enrollment": dict(e) if e else None}
 
 
 # ── recipes: a big model's site breakdown, compiled into one call a small model can make ────────────────────────────
@@ -1366,6 +1602,31 @@ def demo():
     m = memory("mo.example"); assert _held("mo.example") and not m["route"]["hold"]["until"], "a hand-set hold has no end"
     e = diagnose("https://mo.example/x", "", [{"outcome": "blocked", "status": 200, "detail": mo}])
     assert e["code"] == "BLOCKED" and "webmaster@example.gov" in e["next_steps"][0], e
+    global KEYS_FILE
+    KEYS_FILE = DB_PATH.parent / "keys.env"
+    r = enroll("request", "legiscan.example", {"route": "enroll_free", "name": "LegiScan API", "signup_url": "https://legiscan.example/register",
+               "base_url": "https://api.legiscan.example/", "auth": {"kind": "query", "name": "key"}, "cost": "free tier",
+               "sample": "https://api.legiscan.example/?op=getStateList&key=KEY"})
+    assert r["ok"] and r["status"] == "needed" and r["access"]["key"] == "LEGISCAN" and r["access"]["sample"].endswith("op=getStateList"), r
+    assert [x["host"] for x in enroll()["enrollments"]] == ["legiscan.example"] and "legiscan.example/register" in enroll()["enrollments"][0]["todo"]
+    assert enroll("done", "legiscan.example")["error"]["code"] == "NO_KEY"
+    os.environ["SCOUT_KEY_LEGISCAN"] = "s3cr3t-k3y"
+    u, hdr, sec = _auth("https://api.legiscan.example/?op=x")
+    assert "key=s3cr3t-k3y" in u and sec == ["s3cr3t-k3y"] and _auth("https://legiscan.example/x")[0] == "https://legiscan.example/x"
+    assert _scrub("echo s3cr3t-k3y back", sec) == "echo [key] back"
+    del os.environ["SCOUT_KEY_LEGISCAN"]
+    KEYS_FILE.write_text("LEGISCAN=from-file\n"); KEYS_FILE.chmod(0o644)
+    assert "LEGISCAN" not in _keys() and keys_file_state().startswith("too open"), "a readable keys file is ignored"
+    KEYS_FILE.chmod(0o600)
+    assert _keys()["LEGISCAN"] == "from-file"
+    st = _access_steps("legiscan.example", "CHALLENGE_WALL")
+    assert st and st[0].startswith("Use LegiScan API (enrolled"), st
+    KEYS_FILE.unlink()
+    assert "needs a person to enroll" in _access_steps("legiscan.example", "CHALLENGE_WALL")[0]
+    enroll("request", "ecfr.example", {"route": "open_api", "name": "eCFR API", "base_url": "https://ecfr.example/api/", "sample": "https://ecfr.example/api/v1/titles"})
+    assert _access_steps("ecfr.example", "CHALLENGE_WALL")[0].startswith("Use the site's official route, eCFR API")
+    assert [x["host"] for x in enroll()["enrollments"]] == ["legiscan.example"], "an open route files no enrollment"
+    assert [h["host"] for h in recipe()["holds"]] == ["mo.example"] and recipe()["open_enrollments"] == 1
     print("scout: ok")
 
 
