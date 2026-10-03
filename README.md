@@ -294,6 +294,14 @@ The sibling crawler's scout went after AMD's catalogue, and every mistake it mad
   and ranked last in `site_map` and `families`.
 - **A title of `=====` is not a title.** It falls back to the page's first real heading.
 - **"… Series" is a category.** So are "… Family" and "… Lineup". Recipes pick their examples from single items.
+- **A page with children under its own path is a hub, not an item.** `families` counts 3 or more child pages as an
+  index. Partner, request-a-quote and contact pages are flagged with the editorial ones. Support pages are not flagged,
+  because some makers keep their product pages under `/support/`.
+- **Listing a whole site again and again gets you blocked.** Four dry runs in an hour, each re-listing amd.com, and its
+  edge answered "Access Denied" to everything. `site_map` now reuses a host's listing for 12 hours (`fresh=true` to
+  list again). The edge's denial page names no IP, only an incident reference (`Reference #18.…`). An incident
+  reference (Akamai Reference #, Cloudflare Ray ID) now counts as the visitor half of a block, so the host is held,
+  not retried.
 
 ## Errors that say what to do next
 

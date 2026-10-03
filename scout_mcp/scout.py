@@ -49,15 +49,22 @@ _ERROR_PAGE = re.compile(r"\b(404|page not found|not found|page (?:doesn't|does 
 # IP> ... for assistance EMAIL: <its webmaster>" with status 200, so a status-only check never saw it and the crawler kept
 # going at full speed (2026-10-03). Two halves keep a page that merely says "blocked" from tripping it.
 _BLOCK_A = re.compile(r"(?i)\b(?:blocked|access denied|request (?:was )?(?:rejected|blocked)|too many requests|forbidden|unusual traffic)\b")
-_BLOCK_B = re.compile(r"(?i)your (?:public )?ip(?: address)?|\b\d{1,3}(?:\.\d{1,3}){3}\b|captcha|are you a (?:robot|human)|try again later")
+# an edge's incident reference is a visitor clue too: Akamai's "Access Denied ... Reference #18.5b2d1102..." names no IP,
+# and amd.com served exactly that to everything after four full re-listings in an hour (Depot, 2026-10-03)
+_BLOCK_B = re.compile(r"(?i)your (?:public )?ip(?: address)?|\b\d{1,3}(?:\.\d{1,3}){3}\b|captcha|are you a (?:robot|human)|try again later|"
+                      r"reference\s*#\s*\d+\.[0-9a-f.]+|ray id|incident id|support id")
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 HOLD_S = 1800                # an automatic hold after a block: probe once when it ends, double it if still blocked
 _JS_NEEDED = re.compile(r"enable javascript|requires javascript|please turn on javascript|you need to enable javascript", re.I)
 _LISTING_WORDS = re.compile(r"(?i)/(products?|catalog(ue)?|shop|collections?|all-products|docs|documentation|blog|articles|library)(/|$|\.)")
 # Editorial sections are never items: amd.com's scout picked /blogs/ and /newsroom/ as its product pattern and a dry run
 # "proved" 689 blog posts as products (Depot, 2026-10-03). Flagged and sorted last wherever Scout ranks url shapes.
+# ...nor are partner, request and contact pages (Depot landed AMD partner pages as products, 2026-10-03). Support stays out of
+# this list: Cisco's product pages live under /support/.
 _EDITORIAL = re.compile(r"(?i)/(blogs?|news(room)?|press(-?releases?|room)?|events?|careers?|jobs|investors?|about(-us)?|media|"
-                        r"webinars?|videos?|podcasts?|stories|insights|articles|authors?|tags?)(/|$)")
+                        r"webinars?|videos?|podcasts?|stories|insights|articles|authors?|tags?|partners?|partner-program|"
+                        r"request(-a)?(-(quote|demo|info|sample))?|contact(-us)?|where-to-buy|dealer-locator|find-a-(dealer|partner))(/|$)")
+LISTING_TTL = 12 * 3600       # a host's listing is reused this long: re-listing a whole site on every run got amd.com to block
 _CATALOG = re.compile(r"(?i)/(products?|catalog(ue)?|shop|store|collections?|parts?|items?)(/|$|\.)")
 # A stall or a reset from a host that resolves is its edge refusing this client quietly, not a network fault: amd.com's
 # edge timed the plain fetch out and reset the browser's HTTP/2 stream (2026-10-03). Scout said "check the url spelling".
@@ -1078,13 +1085,33 @@ def _walk_links(starts, host, on, rp, budget, urls):
     return len(opened)
 
 
-def site_map(url, filter="", limit=500, walk=20):
+def _listing_cache(url, urls=None, how=""):
+    """Read (urls None) or write the last full listing of a url. Four dry runs in an hour that each re-listed amd.com
+    were what got it to block (Depot, 2026-10-03): a listing is reused for LISTING_TTL."""
+    try:
+        with _db() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS listing (url TEXT PRIMARY KEY, at REAL, how TEXT, urls TEXT)")
+            if urls is None:
+                r = c.execute("SELECT at, how, urls FROM listing WHERE url=?", (url,)).fetchone()
+                return (r["at"], r["how"], json.loads(r["urls"])) if r and time.time() - r["at"] < LISTING_TTL else None
+            c.execute("INSERT OR REPLACE INTO listing (url, at, how, urls) VALUES (?, ?, ?, ?)", (url, time.time(), how, json.dumps(urls)))
+    except sqlite3.Error:
+        return None
+
+
+def site_map(url, filter="", limit=500, walk=20, fresh=False):
     """The site's real urls: robots.txt sitemaps, a polite link walk when they are thin, and the catalogue's own root
-    (found by the scored locale x root parts) when nothing listed so far looks like a catalogue."""
+    (found by the scored locale x root parts) when nothing listed so far looks like a catalogue. A listing is reused for
+    12 hours unless fresh=True: re-listing a whole site run after run is how crawlers get blocked."""
     if "://" not in url:
         url = "https://" + url
     p = urllib.parse.urlsplit(url)
     root, host = f"{p.scheme}://{p.netloc}", p.netloc.lower()
+    cached = None if fresh else _listing_cache(url)
+    if cached:
+        at, how0, urls = cached
+        return _site_map_out(url, root, host, urls, filter, limit, f"reused the listing from {int((time.time() - at) / 60)} min ago ({how0}); "
+                             "fresh=true lists again", "cached")
     h = _held(host)
     if h:
         return {"ok": False, "site": root, "count": 0, "urls": [], "patterns": [], "robots": None, "how": "on hold",
@@ -1107,13 +1134,19 @@ def site_map(url, filter="", limit=500, walk=20):
             before = len(urls)
             n = _walk_links([lst["url"]], host, on, rp, walk, urls)
             how.append(f"catalogue root {lst['url']}: opened {n} page(s), {len(urls) - before} new urls")
+    if urls and not _held(host):
+        _listing_cache(url, urls, "; ".join(how))
+    return _site_map_out(url, root, host, urls, filter, limit, "; ".join(how), state)
+
+
+def _site_map_out(url, root, host, urls, filter, limit, how, state):
     rx = re.compile(filter, re.I) if filter else None
     hits = [u for u in urls if not rx or rx.search(u)]
     top = Counter(_pattern(u) for u in hits).most_common(25)
     pats = [{"pattern": pt, "count": n, "samples": [u for u in hits if _pattern(u) == pt][:3],
              **({"editorial": True} if _EDITORIAL.search(pt) else {})} for pt, n in top]
     pats = sorted(pats, key=lambda x: (x.get("editorial", False), -x["count"]))[:15]   # editorial sections are never the items
-    out = {"ok": bool(hits), "site": root, "count": len(hits), "urls": hits[:int(limit)], "robots": state, "how": "; ".join(how),
+    out = {"ok": bool(hits), "site": root, "count": len(hits), "urls": hits[:int(limit)], "robots": state, "how": how,
            "patterns": pats}
     if not hits:
         h = _held(host)
@@ -1293,7 +1326,11 @@ def families(url, want="", depth=2, fams=4):
         if not r["ok"]:
             return {"url": u, "kind": r["error"]["code"]}
         fs = link_families(r.get("links"), r["url"], nav)
-        return {"url": r["url"], "kind": "index" if fs and len(fs[0][1]) >= 10 else "page", "chars": r["chars"],
+        own = urllib.parse.urlsplit(r["url"]).path.rstrip("/") + "/"
+        kids = {l["url"].split("#")[0] for l in r.get("links") or [] if _host(l["url"]) == _host(r["url"])
+                and urllib.parse.urlsplit(l["url"]).path.startswith(own) and urllib.parse.urlsplit(l["url"]).path.rstrip("/") + "/" != own}
+        # a page with 3+ children under its own path is a family hub, not an item (AMD's hubs landed as products, 2026-10-03)
+        return {"url": r["url"], "kind": "index" if (fs and len(fs[0][1]) >= 10) or len(kids) >= 3 else "page", "chars": r["chars"],
                 "prose": prose(r["markdown"]), "title": r.get("title", "")[:80], "_links": r.get("links")}
 
     def walk(u, links, level, nav=frozenset()):
@@ -1713,6 +1750,12 @@ def demo():
         g.update(saved)
     assert "https://c.example/en/products" in starts and "catalogue root" in m["how"], m["how"]
     assert m["patterns"][0]["pattern"] == "/en/products/*" and m["patterns"][-1].get("editorial"), m["patterns"]
+    akamai = "Access Denied You don't have permission to access this server. Reference #18.5b2d1102.1791056400.2f9c1a"
+    assert _blocked(akamai) and judge({"markdown": akamai}) == "blocked"
+    assert _EDITORIAL.search("/en/partners/*") and _EDITORIAL.search("/request-a-quote") and not _EDITORIAL.search("/c/en/us/support/*")
+    _listing_cache("https://c.example", ["https://c.example/p/1", "https://c.example/p/2"], "test")
+    m = site_map("https://c.example")
+    assert m["robots"] == "cached" and m["count"] == 2 and "reused the listing" in m["how"], m
     print("scout: ok")
 
 

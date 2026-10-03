@@ -37,7 +37,7 @@ Once you have reached good information, turn the path you took into a recipe, so
 2. Choose 3 example inputs from `terrain.patterns` samples or a `site_map` call. Make them different from each other:
    upper and lower case, a `+`, spaces. Take them from item patterns, never from a pattern marked `editorial`
    (blogs, news, press, careers): those are never the items. A page named "… Series", "… Family" or "… Lineup" is a
-   category, not an item.
+   category, not an item, and so is a page that lists 3 or more child pages under its own path (a family hub).
 3. Write the steps. Each step is one operation:
    - `input`: rewrite rules for the input (slug rules)
    - `map`: find the real url in the sitemap. Prefer this to a guessed url template.

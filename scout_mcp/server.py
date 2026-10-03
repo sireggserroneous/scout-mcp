@@ -31,10 +31,11 @@ async def reach(url: str, want: str = "", full: bool = False) -> dict:
 
 
 @mcp.tool()
-async def site_map(url: str, filter: str = "", limit: int = 500) -> dict:
-    """A site's real urls (robots.txt sitemaps, then a polite link walk) with their url patterns. `filter` is a regex.
-    Use it instead of guessing paths."""
-    return await asyncio.to_thread(S.site_map, url, filter, limit)
+async def site_map(url: str, filter: str = "", limit: int = 500, fresh: bool = False) -> dict:
+    """A site's real urls (robots.txt sitemaps, a polite link walk, the catalogue's root) with their url patterns.
+    `filter` is a regex. A listing is reused for 12 hours; fresh=true lists the site again (only when it changed:
+    re-listing a whole site run after run is how crawlers get blocked). Use it instead of guessing paths."""
+    return await asyncio.to_thread(S.site_map, url, filter, limit, 20, fresh)
 
 
 @mcp.tool()
