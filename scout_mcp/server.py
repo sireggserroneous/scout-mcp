@@ -9,9 +9,9 @@ except ImportError:
 from . import scout as S
 
 mcp = MCPServer("scout", instructions=(
-    "Scout reaches good information on the open web as an honest bot. Start with scout(url) for a site, reach(url, want) "
-    "for one page. When ok is false, read error.code and error.next_steps: each step is a concrete call. Teach Scout what "
-    "worked with moves(action='propose', ...) so the next reach, for anyone sharing this memory, starts from the answer."))
+    "Scout reaches good information on websites and learns the route. Big models: scout(url) or reach(url, want) to "
+    "work a site out, then compile(...) what worked into a recipe. Small models: call run(recipe, input) and copy its "
+    "RESULT line. When ok is false, error.next_steps are concrete calls to try next."))
 
 
 @mcp.tool()
@@ -53,13 +53,55 @@ async def moves(action: str = "list", kind: str = "", scope: str = "*", spec: di
 
 
 @mcp.tool()
-async def recipe(host: str = "") -> dict:
+async def memory(host: str = "") -> dict:
     """What Scout has learned about a host: winning reader, reader order, routes (listing, detail_suffix, patterns),
     the moves that apply, recent failures. No host: recent failures everywhere and the whole register."""
     return await asyncio.to_thread(S.recipe, host)
 
 
+@mcp.tool()
+async def compile(name: str, steps: list, examples: list | None = None, about: str = "", input_name: str = "") -> dict:
+    """Compile what you worked out about a site into a recipe a small model can run in one call. Scout runs it on
+    every example and saves it only if all pass; the reply carries the one-line card for the small model.
+    name: '<host>/<slug>'. input_name: what the caller supplies ('model', 'sku'; empty for none). examples: 2+ inputs.
+    steps, run in order, each a one-key object:
+      {"input": [[regex, repl], ...], "lower": true}   rewrite the input (slug rules)
+      {"map": "https://site", "filter": "/product/{input}$"}   the site's own urls; first match becomes {url}
+      {"reach": "https://site/p/{input}" | "{url}", "want": regex}   read a page
+      {"find": regex}   first link on the page matching (url or text) becomes {url}
+      {"extract": {"field": "regex with one group"}}   every field must be found
+    Prefer map over a guessed url template: sites are inconsistent about case and slugs."""
+    return await asyncio.to_thread(S.compile_recipe, name, steps, examples, about, input_name)
+
+
+@mcp.tool()
+async def run(recipe: str, input: str = "") -> dict:
+    """Run a compiled recipe. Reply with the RESULT line."""
+    r = await asyncio.to_thread(S.run, recipe, input)
+    return {k: r[k] for k in ("result", "fix") if k in r}
+
+
+@mcp.tool()
+async def recipes(host: str = "") -> list:
+    """The compiled recipes (optionally for one host): what each takes, its score, whether its last run failed, and the
+    one-line card a small model runs."""
+    return await asyncio.to_thread(S.recipes, host)
+
+
 def main():
+    """No arguments: the MCP server on stdio. `scout-mcp run <recipe> [input]` prints one RESULT line (exit 1 on fail);
+    `scout-mcp recipes` lists the cards. Small models are good at one shell command."""
+    import json
+    import sys
+    args = sys.argv[1:]
+    if args[:1] == ["run"] and len(args) >= 2:
+        r = S.run(args[1], " ".join(args[2:]))
+        print(r["result"])
+        sys.exit(0 if r["ok"] else 1)
+    if args[:1] == ["recipes"]:
+        for r in S.recipes(args[1] if len(args) > 1 else ""):
+            print(json.dumps({k: r[k] for k in ("name", "about", "status", "bash")}))
+        return
     mcp.run()
 
 

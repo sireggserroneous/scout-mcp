@@ -1,178 +1,196 @@
 # Scout MCP
 
-Scout is an MCP server for building a web crawler that gets better with use. Its job is to get good information
-from a website.
+Scout is an MCP server for web crawling that improves with use. A capable model like Claude works a site out once.
+Scout compiles what it learned into a **recipe** that a 4B model can run with one instruction.
 
-Scout is an **HonestBot**. It scouts the open web without tricks and never pretends to be a person:
+```
+/scout https://mikrotik.com/product/RB433AH price|cpu
+```
 
-- Every request carries one plain user agent: `ScoutMCP/0.1.0 (+https://github.com/sireggserroneous/scout-mcp)`.
-  Scout refuses to start if you set a user agent that looks like a browser.
-- It obeys `robots.txt` and `Crawl-delay`, and sends at most one request per second to a host.
-- It does not solve CAPTCHAs, rotate identities, use proxies, or log in for you.
+Claude reaches the page, maps the site and finds the traps. It then hands back a one-line card that Qwen3.5-4B runs
+correctly from then on:
 
-If a site says no, Scout reports that and suggests an honest next step. It does not try to get around the refusal.
+```
+Call the tool run with recipe="mikrotik.com/specs" and input="hAP ax2". Reply with the RESULT line only.
+
+RESULT: ok | mikrotik.com/specs | hAP ax2 | url=https://mikrotik.com/product/hap_ax2; title=MikroTik · hAP ax²; price=$99.00; cpu=IPQ-6010; ram=1 GB; max_power=27 W
+```
 
 ## Install
 
-**Claude Code** (plugin: MCP server and the `/scout` skill):
+**Claude Code** (installs the MCP server and the `/scout` skill):
 
 ```
 /plugin marketplace add sireggserroneous/scout-mcp
 /plugin install scout@scout-mcp
 ```
 
-Then type `/scout` followed by the url you want to scout:
-
-```
-/scout https://mikrotik.com
-/scout https://mikrotik.com/product/RB433AH weight|dimensions
-```
-
-**Any other MCP client.** Scout needs [uv](https://docs.astral.sh/uv/). Add this to the client's MCP config:
+**Any MCP client.** Install [uv](https://docs.astral.sh/uv/), then add this to the client's MCP config:
 
 ```json
 { "mcpServers": { "scout": { "command": "uvx",
   "args": ["--from", "git+https://github.com/sireggserroneous/scout-mcp", "scout-mcp"] } } }
 ```
 
-**Pages built by JavaScript.** Scout needs a headless browser to read these. Add `"--with", "playwright"` to the
-uvx args (in Claude Code, the plugin's `.mcp.json`), then download Chromium once:
+**Pages built by JavaScript** need a headless browser. Add `"--with", "playwright"` to the uvx args, then run
+`uvx playwright install chromium` once. If you already run Firecrawl or crawl4ai, set `FIRECRAWL_URL` or
+`CRAWL4AI_URL` and Scout uses it as one more reader.
+
+## From a maze to one line
+
+Getting MikroTik specs looks like a one-step job. Here is what Claude actually ran into on the way:
+
+| Try | Result |
+|---|---|
+| guess `mikrotik.com/product/{model}` | `RB433AH` works. `hAP ac3` is a 404: that page lives at `hap_ac3`. |
+| lowercase it, turn spaces into `_` | Now `RB433AH` is a 404: that one really is uppercase. |
+| also turn `+` into `plus` | `CRS354-48G-4S+2Q+RM` works (`crs354_48g_4splus2qplusrm`)… |
+| | …but `RB5009UG+S+IN` lives at `rb5009ug_s_in`. Same character, opposite rule. |
+| **look the url up in the sitemap, comparing both sides with `plus` and punctuation removed** | **all four styles work** |
+
+Then the data: 4 fields, each a label on one line and its value on a later line, on a page that also has a 40-row
+throughput table, a documents list and a retailer map.
+
+Written out as instructions, that is a 7-step program with a string-normalisation rule, a loop over 566 urls,
+a branch for "not found", and four lookups in a 7,000-character page. That is too much for a 4B model. So it is
+never handed to one. Claude compiles it instead:
+
+```json
+{"name": "mikrotik.com/specs", "input_name": "model",
+ "examples": ["RB433AH", "hAP ac3", "CRS354-48G-4S+2Q+RM", "RB5009UG+S+IN", "CCR2004-1G-12S+2XS"],
+ "steps": [
+  {"map": "https://mikrotik.com", "filter": "/product/", "same": [["plus", ""], ["[^a-z0-9]", ""]]},
+  {"reach": "{url}", "want": "Specification"},
+  {"extract": {"price":     "^\\s*-\\s*Suggested price\\s*\\n\\s*(\\S.*)$",
+               "cpu":       "^\\s*-\\s*CPU\\s*\\n\\s*(\\S.*)$",
+               "ram":       "^\\s*-\\s*Size of RAM\\s*\\n\\s*(\\S.*)$",
+               "max_power": "^\\s*-\\s*Max power consumption\\s*\\n\\s*(\\S.*)$"}}]}
+```
+
+`compile` runs the recipe on every example and **saves it only if all of them pass**. The two wrong guesses above
+were caught this way: each one passed on some examples and failed on others. Once saved, every branch lives in code.
+The small model gets one card and one tool, and its whole job is a single call:
+
+| | the small model gets | the small model must |
+|---|---|---|
+| without a recipe | 7 numbered steps, `site_map` and `reach` | normalise strings, scan 566 urls, branch, read a 7k-char page, format a line |
+| with a recipe | 1 line, the `run` tool | make one call, copy one line |
+
+**Measured on Qwen3.5-4B** (Q4_K_M, llama.cpp on a laptop iGPU), on 5 MikroTik models, as an A/B:
+
+| | exact answer | tool calls | wall time (median) |
+|---|---|---|---|
+| **A**: the 7 steps as instructions, `site_map` + `reach` | 4 / 5 | 2–4 per model, 15 in all (5 of them wrong turns) | 389–671 s (414 s) |
+| **B**: the card, `run` | **5 / 5** | **1 per model** | **22–195 s (88 s)** |
+
+In arm A, Qwen filtered the sitemap with the raw model name, built a url with a space in it, and once dropped the `$`
+from a price. It reached the right page in the end, but it took 3 to 11 minutes each time, mostly spent reading 566
+urls and a 7,000-character page. In arm B the model never sees any of that. One arm-A run did catch a bug in the
+recipe: the RAM regex had matched a sentence in the product description, not the spec list. The fix (anchoring each
+field to its list item) went in, the recipe was recompiled with that model as a fifth example, and the arm-B run was
+repeated on the fixed recipe. Both arms used the same model and the same Scout. Harness: `bench/qwen_ab.py`.
+
+If a page changes, `run` fails loudly with a code: `NO_MATCH at step 1`, `EXTRACT_MISS at step 3`. The recipe's
+score drops, and `recipes()` marks it `last run failed … recompile`. The next big-model session fixes the recipe. The
+small model's card stays the same.
+
+The CLI form fits a small model with a shell. It prints one line and exits 1 on failure:
 
 ```
-uvx playwright install chromium
+$ scout-mcp run mikrotik.com/specs "CCR2004-16G-2S+"
+RESULT: ok | mikrotik.com/specs | CCR2004-16G-2S+ | url=https://mikrotik.com/product/ccr2004_16g_2splus; ... price=$465.00; cpu=AL32400; ram=4 GB; max_power=48 W
+$ scout-mcp run mikrotik.com/specs "nope 9"
+RESULT: fail | mikrotik.com/specs | nope 9 | NO_MATCH at step 1
 ```
 
-If you already run a self-hosted [Firecrawl](https://github.com/mendableai/firecrawl) or
-[crawl4ai](https://github.com/unclecode/crawl4ai), set `FIRECRAWL_URL` or `CRAWL4AI_URL` and Scout adds it as a
-reader. It sends the same honest user agent through every reader.
+### Recipe steps
 
-Installing Scout gives you three things at once:
-- **A crawler.** It reads sitemaps and walks a site's links.
-- **A reader.** It fetches pages directly, through a headless browser, or through your Firecrawl or crawl4ai.
-- **A recipe book.** It keeps every route it learns.
+| Step | Does |
+|---|---|
+| `{"input": [[regex, repl], ...], "lower": true}` | rewrites the input (slug rules) |
+| `{"map": url, "filter": regex, "same": [[regex, repl], ...]}` | the site's own urls. `same` keeps the url whose last segment equals the input after both are rewritten. Last step: returns the list. Otherwise: the first url becomes `{url}`. |
+| `{"reach": "https://…/{input}" \| "{url}", "want": regex}` | reads a page with the full reader ladder (below) |
+| `{"find": regex}` | the first link on the page whose url or text matches becomes `{url}` |
+| `{"extract": {"field": regex}}` | group 1 of each regex. Every field must be found. |
 
-You do not have to work out each site by hand.
+## How Scout learns: a maze, a Markov chain, and rewrite rules
 
-## How it works: a maze, a Markov chain, and a register of rewrite rules
+Every way to reach a page is a **move**:
+- the readers: `direct`, `firecrawl`, `crawl4ai`, `browser`
+- `url_rewrite`: a regex on the full url
+- `listing_path`: where a site keeps its index of things, such as `/products`, `/catalog` or `/docs`
+- `detail_suffix`: where the details live, such as `/specifications`
 
-Reaching a page is a maze. One site answers a plain fetch. Another is an empty JavaScript shell until a browser
-renders it. A third keeps its details on `/specifications`, one hop past the url you were given. Most crawlers
-retry these dead ends every time.
-
-Scout treats each way through as a **move**:
-- **Readers**: `direct`, `firecrawl`, `crawl4ai`, `browser`
-- **`url_rewrite`**: a regex on the full url, such as a print view or a public archive copy
-- **`listing_path`**: where a site keeps its index of things, such as `/products`, `/catalog` or `/docs`
-- **`detail_suffix`**: where the details live, such as `/specifications` or `/specs`
-
-The idea is borrowed from Markov chains and from MarkovJunior-style rewrite rules. The state is where Scout has got
-to on the url. Each move is a transition to a new state. The end of the maze is the goal state: **good
-information**. Good information means real content (not a wall, a login page or an error page) that carries what
-you asked for, when you asked for something.
+The idea comes from Markov chains and MarkovJunior-style rewrite rules. Each move takes Scout from one state to the
+next. The goal state is **good information**: real content (not a wall, a login page or an error page) that carries
+what you asked for.
 
 ```mermaid
 flowchart LR
-  U[url + want] --> R{robots.txt allows?}
-  R -- no --> E1[ROBOTS_DISALLOWED + next steps]
-  R -- yes --> O[host's ordered moves<br/>winner first, recent failures last]
+  U[url + want] --> O[host's ordered moves<br/>winner first, recent failures last]
   O --> J{good information?}
-  J -- yes --> W[return page<br/>learn the winner]
+  J -- yes --> W[return page · learn the winner]
   J -- no --> N[next move: reader → url_rewrite → detail_suffix → on-page link]
   N --> J
-  N -- maze exhausted --> E2[coded error + next steps<br/>logged for whoever evolves the register]
+  N -- maze exhausted --> E[coded error + next steps · logged]
+  W -. a big model compiles the path .-> R[recipe: one call for a small model]
 ```
 
-There are two kinds of memory, both in one SQLite file:
+- **Each host keeps its readers in order.** The reader that last worked goes first, and one that failed goes to the
+  back for six hours. When excalidraw.com gives a plain fetch an empty JavaScript shell, Scout falls back to the
+  browser. On the next visit it starts with the browser.
+- **The register stores moves as data.** Each move has a scope (`*`, a domain or a host regex) and a Laplace score
+  `(wins + 1) / (tries + 2)`. A move nobody has tried scores 0.5. A move that loses its first five tries is retired.
+  Agents propose moves with `moves(action='propose', …)`, and real traffic decides which ones stay.
+- **Recipes are the compiled layer on top.** Every run scores a recipe, the same way moves are scored.
 
-1. **Each host keeps an ordered list of readers.** The reader that last worked goes first. A reader that failed there
-   goes to the back for six hours. It is never dropped, because a block today may be gone tomorrow. The second time
-   you reach an excalidraw.com page, Scout skips the plain fetch that gave it an empty shell and goes straight to the
-   browser.
-2. **The moves register stores rewrite rules as data.** Each rule has a scope (`*`, a domain, or a host regex) and a
-   score, its Laplace win rate `(wins + 1) / (tries + 2)`. A move nobody has tried scores 0.5, so it gets a fair try.
-   A move that wins 3 of 3 scores 0.8. A move that loses its first five tries is retired, but it stays in the table
-   as evidence. Scout tries register moves only after its built-in moves have failed, so a new move has to earn its
-   place.
+Point `SCOUT_DB` at a shared path and a whole team, people and agents alike, learns from each other's runs.
 
-Anyone can add a move: you, an agent, or an evaluator reading the failure log. Scout scores each new move on real
-traffic, so the moves that work rise to the top and the rest drop away. That is the sense in which the crawler
-evolves.
+## Errors that say what to do next
 
-Point `SCOUT_DB` at a shared path and a team shares one memory. A route one person learns is the first move the next
-person tries.
+When Scout fails, it returns an error `code`, a `message`, and `next_steps` written as concrete tool calls, plus the
+`tried` trail it took through the maze. Any capable model can pick up from there.
 
-## Errors that tell an AI what to do next
-
-When Scout fails, it returns an error code, an explanation, and next steps that are concrete tool calls, plus the
-`tried` trail it took through the maze. Any capable model can start from there:
-
-```json
-{
-  "ok": false,
-  "error": {
-    "code": "WANT_MISS",
-    "message": "Reached real content at https://mikrotik.com/product/RB433AH (7336 chars) but nothing matched want='zzqqxx', and the sub-pages Scout tried did not either.",
-    "next_steps": [
-      "`want` is a regex matched case-insensitively against the page text: loosen it (e.g. 'weight|kg|lbs') or drop it to read the page.",
-      "Read `closest.markdown` below: the words on the page may differ from the ones you asked for.",
-      "If this site keeps details on a sub-page, teach Scout: moves(action='propose', kind='detail_suffix', scope='mikrotik.com', spec={'suffix': '/specifications'})",
-      "site_map('https://mikrotik.com') — pick a real url from the site's own list instead of guessing"
-    ]
-  },
-  "tried": [{"reader": "direct", "outcome": "want_miss", "chars": 7336},
-            {"reader": "direct", "outcome": "not_found", "via": "detail_suffix #12 /specifications"}],
-  "closest": {"title": "MikroTik · RB433AH", "markdown": "…"}
-}
-```
-
-| Code | Meaning | What the next steps point to |
-|---|---|---|
-| `ROBOTS_DISALLOWED` | robots.txt says no | an official API or feed, allowed pages from `site_map`, asking the owner |
-| `RATE_LIMITED` | the host answered 429 | wait for `Retry-After`, then slow down |
-| `CHALLENGE_WALL` | a bot challenge or consent wall | an official API, a public archive copy as a `url_rewrite` move, the same document elsewhere |
-| `REFUSED` | 401/403/451 to an honest bot | other paths from `site_map`, an API, an archive copy, asking the owner |
-| `LOGIN_REQUIRED` | a login or paywall | the site's API with your own key (outside Scout), public copies |
-| `NOT_FOUND` | 404, or an error page | `site_map` instead of guessing paths |
-| `JS_SHELL` | the page is built by script | installing the browser reader, the site's JSON endpoints, a print view |
-| `THIN_CONTENT` | nothing readable came back | a rendering reader, `site_map` |
-| `WANT_MISS` | real content, but not what you wanted | loosening `want`, a `detail_suffix` move, `site_map` |
-| `TLS_ERROR` / `NETWORK` / `SERVER_ERROR` | transport problems | the cause (for example a missing intermediate certificate), retrying later |
-| `NO_URLS` / `NO_LISTING` | the map came up empty | `reach` to see the page, proposing a `listing_path` move |
-
-Every failure is also written to a log (`recipe()` with no host shows it). That log is where the next move to add
-should come from.
+| Code | Next steps point to |
+|---|---|
+| `NOT_FOUND` | `site_map` instead of guessing paths |
+| `WANT_MISS` | loosening `want`, a `detail_suffix` move, `site_map` |
+| `JS_SHELL` / `THIN_CONTENT` | adding a rendering reader, the site's JSON endpoints, a print view |
+| `REFUSED` / `CHALLENGE_WALL` / `LOGIN_REQUIRED` | the site's API, an archive copy as a `url_rewrite` move, the same document elsewhere |
+| `ROBOTS_DISALLOWED` / `RATE_LIMITED` | an official feed, waiting for `Retry-After` |
+| `TLS_ERROR` / `NETWORK` / `SERVER_ERROR` | the cause, retrying later |
+| `NO_URLS` / `NO_LISTING` / `NO_MATCH` / `EXTRACT_MISS` / `TEST_FAILED` | what to recompile or propose |
 
 ## Tools
 
-| Tool | What it does |
-|---|---|
-| `scout(url, want?, full?)` | The whole run: reach the page, map the site's url patterns, find its listing, and return what was learned |
-| `reach(url, want?, full?)` | Reach one page and judge whether it is good information |
-| `site_map(url, filter?, limit?)` | The site's own urls (sitemaps from robots.txt, then a polite link walk) and their url patterns |
-| `moves(action, kind?, scope?, spec?, id?, note?, host?)` | List, propose or retire rewrite rules |
-| `recipe(host?)` | What Scout knows about a host: reader order, routes, moves, recent failures |
+| Tool | For | Does |
+|---|---|---|
+| `scout(url, want?)` | big model | reaches the page, maps url patterns, finds the listing, reports what was learned |
+| `reach(url, want?, full?)` | big model | reads one page through the learned ladder |
+| `site_map(url, filter?)` | big model | the site's own urls and their patterns |
+| `compile(name, steps, examples, …)` | big model | tests a recipe and saves it, returns the small-model card |
+| `moves(action, …)` | big model | lists, proposes or retires moves |
+| `memory(host?)` | big model | reader order, routes, moves and recent failures for a host |
+| `recipes(host?)` | both | compiled recipes with scores, status and cards |
+| `run(recipe, input?)` | **small model** | runs a recipe, returns one RESULT line |
 
-`want` is a case-insensitive regex. Pages longer than 6,000 characters come back as an excerpt, plus windows around
-each `want` match. Pass `full=true` to get the whole page.
+Give the small model only `run`, or the CLI. One tool means it has nothing to choose between.
 
 ## Configuration
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `SCOUT_DB` | `~/.local/share/scout-mcp/scout.db` | the memory; share the path to share what is learned |
-| `SCOUT_USER_AGENT` | `ScoutMCP/<version> (+repo url)` | your own bot name and contact; browser-like values are rejected |
-| `SCOUT_MIN_INTERVAL` | `1.0` | minimum seconds between requests to one host |
-| `FIRECRAWL_URL`, `FIRECRAWL_API_KEY` | unset | add a Firecrawl reader |
-| `CRAWL4AI_URL`, `CRAWL4AI_TOKEN` | unset | add a crawl4ai reader |
+| Variable | Default |
+|---|---|
+| `SCOUT_DB` | `~/.local/share/scout-mcp/scout.db` |
+| `SCOUT_USER_AGENT` | `ScoutMCP/<version> (+https://github.com/sireggserroneous/scout-mcp)` |
+| `SCOUT_MIN_INTERVAL` | `1.0` seconds between requests to one host |
+| `FIRECRAWL_URL`, `FIRECRAWL_API_KEY`, `CRAWL4AI_URL`, `CRAWL4AI_TOKEN` | unset |
 
 ## Develop
 
 ```
-uv venv && uv pip install -e '.[browser]'
+uv venv && uv pip install -e . playwright
 python -m scout_mcp.scout      # self-checks, no network
 ```
 
-Scout is one module (`scout_mcp/scout.py`) and a thin MCP wrapper (`scout_mcp/server.py`). The seed moves live in
-`scout_mcp/recipes.json`.
-
-MIT licensed.
+There are two modules. `scout_mcp/scout.py` is the engine, and `scout_mcp/server.py` holds the MCP tools and the CLI.
+Seed moves and example recipes are in `scout_mcp/recipes.json`. MIT licensed.
