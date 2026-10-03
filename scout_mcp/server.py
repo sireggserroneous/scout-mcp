@@ -38,6 +38,15 @@ async def site_map(url: str, filter: str = "", limit: int = 500) -> dict:
 
 
 @mcp.tool()
+async def families(url: str, want: str = "", depth: int = 2) -> dict:
+    """Which of a page's link families lead to good pages, and how many. Each family (links whose paths differ only in
+    their numbers, like /chapter/1/ and /chapter/14A/) is sampled across its spread, the samples vote on what the family
+    leads to (an index of more links, or pages), indexes are walked one level deeper, and families are ranked by yield
+    through every level. `best.recipe_hint` is a draft recipe for compile. Use it on sites with no useful sitemap."""
+    return await asyncio.to_thread(S.families, url, want, depth)
+
+
+@mcp.tool()
 async def moves(action: str = "list", kind: str = "", scope: str = "*", spec: dict | None = None, id: int = 0,
                 note: str = "", host: str = "") -> dict:
     """The moves register: rewrite rules Scout tries where its built-in moves fail, each scored (wins+1)/(tries+2) on
@@ -71,6 +80,7 @@ async def compile(name: str, steps: list, examples: list | None = None, about: s
       {"map": "https://site", "filter": "/product/{input}$"}   the site's own urls; first match becomes {url}
       {"reach": "https://site/p/{input}" | "{url}", "want": regex}   read a page
       {"find": regex}   first link on the page matching (url or text) becomes {url}
+      {"links": "/chapter/<n>/"}   a link family from families(); last step = all its links, else the first is {url}
       {"extract": {"field": "regex with one group"}}   every field must be found
     Prefer map over a guessed url template: sites are inconsistent about case and slugs."""
     return await asyncio.to_thread(S.compile_recipe, name, steps, examples, about, input_name)

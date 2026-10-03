@@ -553,7 +553,7 @@ def reach(url, want="", full=False, _depth=0, _links=False):
         md = page.get("markdown") or ""
         return {"ok": True, "url": page.get("final_url") or url, "requested_url": url, "via": via,
                 "reader": [t for t in tried if t["outcome"] == "ok"][-1]["reader"], "title": page.get("title", ""),
-                "chars": len(md), "markdown": excerpt(md, want, full), "tried": tried, "learned": memory(host),
+                "chars": len(md), "prose": prose(md), "markdown": excerpt(md, want, full), "tried": tried, "learned": memory(host),
                 **({"links": page.get("links") or []} if _links else {})}
     best = reader if isinstance(reader, dict) else None
     err = diagnose(url, want, tried, best)
@@ -811,6 +811,129 @@ def listing(url, urls=None):
                            f"If you know the path, teach Scout: moves(action='propose', kind='listing_path', scope='{host}', spec={{'path': '/your/path'}})"]}}
 
 
+# ── link families: how a site's own links lead to its items, walked by sampling ─────────────────────────────────────
+# Learned by the Depot recipe chain rebuilding 16 state codes from scratch (2026-10-03). A link's family is its path
+# with every number-bearing token generalised, so Chapter_1.html and Chapter_14A.html (and NHTOC-I / NHTOC-XIV) are one.
+# Sample a family spread across it, never its first links (a list opens with its odd items); let the majority of the
+# samples decide what the family leads to, not whichever came back first; look deeper when the samples are indexes;
+# rank by yield through every level, or a five-page index outranks 89 chapters of sections.
+_ROMAN = r"(?<=[-_/=])[IVXLC]{1,7}(?=[-_./]|$)"
+_FUNCTION = frozenset("the of and to in a an or by for shall be is are any as on with that this which may not such from at "
+                      "under who its no if than each other all upon has have been".split())
+
+
+def prose(text):
+    """How much text reads like sentences, not a site's menu: mostly function-word density (the, of, shall, any). Prose
+    runs ~0.35-0.5; menus and breadcrumbs ~0.15. Capitals and length could not tell them apart."""
+    w = re.findall(r"[A-Za-z]{2,}", (text or "")[:800])
+    if len(w) < 8:
+        return 0.0
+    fw = sum(x.lower() in _FUNCTION for x in w) / len(w)
+    lower = sum(x[0].islower() for x in w) / len(w)
+    return round(min(1.0, fw / 0.35) * (0.5 + 0.5 * lower), 3)
+
+
+def family_of(u):
+    p = urllib.parse.urlsplit(u)
+    path = p.path + ("?" + p.query if p.query else "")
+    shape = re.sub(_ROMAN, "<n>", re.sub(r"[0-9][0-9A-Za-z]*", "<n>", path))
+    return shape if "<n>" in shape else _pattern(u)       # no numbers: siblings under one parent (/products/*)
+
+
+def _family_rx(shape):
+    return re.compile(re.escape(shape).replace(re.escape("<n>"), "[0-9A-Za-z]+").replace(re.escape("*"), "[^/?]+") + "/?$")
+
+
+def link_families(links, base, nav=()):
+    """[(shape, [urls])] for one page's links: same host, not itself, no assets, 3+ distinct urls, biggest first.
+    Siblings group under their parent first; the numeric shape names the family only when one shape covers 80% of them
+    (Idaho's Title<n>), else it is the parent (/product/* holds RB<n> and crs<n>_<n>). `nav`: families of the page above,
+    which on this page are navigation, not content (2026-10-03, MikroTik's category menu on every page)."""
+    host, groups = _host(base).removeprefix("www."), {}
+    for l in links or []:
+        u = l["url"].split("#")[0]
+        if _host(u).removeprefix("www.") != host or u.rstrip("/") == base.split("#")[0].rstrip("/") or _FILE.search(u):
+            continue
+        groups.setdefault(_pattern(u), []).append(u)
+    fam = {}
+    for parent, us in groups.items():
+        us = list(dict.fromkeys(us))
+        shapes = Counter(family_of(u) for u in us)
+        top, n = shapes.most_common(1)[0]
+        if "<n>" in top and n >= 0.8 * len(us):
+            fam.setdefault(top, []).extend(u for u in us if family_of(u) == top)
+        elif parent != "/":
+            fam.setdefault(parent, []).extend(us)
+    out = [(k, list(dict.fromkeys(v))) for k, v in fam.items() if k not in nav]
+    return sorted([x for x in out if len(x[1]) >= 3], key=lambda x: -len(x[1]))
+
+
+def _spread(urls, n):
+    return list(dict.fromkeys(urls[len(urls) * k // (n + 1)] for k in range(1, n + 1)))
+
+
+def families(url, want="", depth=2, fams=4):
+    """Which of a page's link families leads to good pages, and how many: spread samples, a majority vote on what they
+    are (an index of more links, or pages), a look one level deeper under indexes, and yield through every level."""
+    if "://" not in url:
+        url = "https://" + url
+    top = reach(url, "", _depth=1, _links=True)
+    if not top["ok"]:
+        return {"ok": False, "url": url, "error": top["error"]}
+
+    def sample(u, nav):
+        r = reach(u, want, _depth=1, _links=True)
+        if not r["ok"]:
+            return {"url": u, "kind": r["error"]["code"]}
+        fs = link_families(r.get("links"), r["url"], nav)
+        return {"url": r["url"], "kind": "index" if fs and len(fs[0][1]) >= 10 else "page", "chars": r["chars"],
+                "prose": prose(r["markdown"]), "title": r.get("title", "")[:80], "_links": r.get("links")}
+
+    def walk(u, links, level, nav=frozenset()):
+        out = []
+        here = link_families(links, u, nav)
+        seen = nav | {f for f, _ in here}                    # what this page already shows is navigation one level down
+        for shape, urls in here[:fams]:
+            got = [sample(x, seen) for x in _spread(urls, 5 if level == 0 else 3)]
+            good = [g for g in got if g["kind"] in ("index", "page")]
+            kind, votes = (Counter(g["kind"] for g in good).most_common(1) or [(None, 0)])[0]
+            fam = {"family": shape, "links": len(urls), "level": level, "held": f"{len(good)}/{len(got)}", "leads_to": kind,
+                   "samples": [{k: v for k, v in g.items() if not k.startswith("_")} for g in got],
+                   "ok": len(good) >= (2 if level == 0 else 1)}
+            fam["yield"] = round(len(urls) * len(good) / len(got)) if fam["ok"] else 0
+            fam["_rep"] = next((g for g in good if g["kind"] == kind), None)
+            out.append(fam)
+        out.sort(key=lambda f: -f["yield"])
+        for fam in out[:2]:                                  # look deeper under the two best index families
+            rep = fam.pop("_rep", None)
+            if fam["ok"] and fam["leads_to"] == "index" and rep and level + 1 < depth:
+                below = walk(rep["url"], rep["_links"], level + 1, seen)
+                best = next((b for b in below if b["ok"]), None)
+                fam["below"] = below[:3]
+                if best:
+                    fam["yield"] = round(fam["yield"] * best["yield"])
+        for fam in out:
+            fam.pop("_rep", None)
+        return sorted(out, key=lambda f: -f["yield"])
+
+    ranked = walk(top["url"], top.get("links"), 0)
+    res = {"ok": any(f["ok"] for f in ranked), "url": top["url"], "families": ranked}
+    best = next((f for f in ranked if f["ok"]), None)
+    if best:
+        chain, f = [best["family"]], best
+        while f.get("below") and next((b for b in f["below"] if b["ok"]), None):
+            f = next(b for b in f["below"] if b["ok"])
+            chain.append(f["family"])
+        res["best"] = {"chain": chain, "estimated_items": best["yield"],
+                       "recipe_hint": [{"reach": top["url"]}] + [st for c in chain[:-1] for st in ({"find": _family_rx(c).pattern}, {"reach": "{url}"})]
+                                      + [{"links": chain[-1]}]}
+    else:
+        res["error"] = {"code": "NO_FAMILY", "message": f"No link family on {top['url']} led to good pages in its samples.",
+                        "next_steps": [f"site_map('{top['url']}') for the site's own list of urls",
+                                       "if the page is built by script, its links may be missing: see reach's tried trail"]}
+    return res
+
+
 def scout(url, want="", full=False):
     """The whole maze for one url: reach the page, map the site, find its listing, and report what was learned."""
     if "://" not in url:
@@ -846,6 +969,8 @@ STEP_OPS = {"input": "[[regex, replacement], ...] rewrites the input before use,
             "map": "site url; optional 'filter' regex; optional 'same': [[regex, repl], ...] keeps the url whose last "
                    "segment equals the input once both are lowercased and rewritten by the rules; last step = the url "
                    "list, else the first match becomes {url}",
+            "links": "a link family shape from families(), like '/chapter/<n>/' or '/products/*'; last step = every "
+                     "matching link on the current page, else the first becomes {url}",
             "extract": "{field: regex}; group 1 (or the whole match) from the current page; every field must be found"}
 _NAME = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}/[a-z0-9-]+$")
 
@@ -947,6 +1072,15 @@ def run(name, input="", recipe=None):
             if i == len(rc["steps"]):
                 out = {"count": sm["count"], "first": sm["urls"][0], "urls": sm["urls"]}
             url = sm["urls"][0]
+        elif op == "links":
+            rx = _family_rx(_fill(st["links"], input, url))
+            hits = list(dict.fromkeys(l["url"].split("#")[0] for l in (page or {}).get("links", [])
+                                      if rx.search(urllib.parse.urlsplit(l["url"]).path + ("?" + urllib.parse.urlsplit(l["url"]).query if urllib.parse.urlsplit(l["url"]).query else ""))))
+            if not hits:
+                return fail("LINKS_MISS", i, f"no link on {url} is in family {st['links']!r}; the page may have changed: recompile")
+            if i == len(rc["steps"]):
+                out = {"count": len(hits), "first": hits[0], "urls": hits}
+            url = hits[0]
         elif op == "extract":
             md = re.sub(r"\[excerpt: .*?\]$", "", (page or {}).get("markdown", ""))
             got, missing = {}, []
@@ -1084,6 +1218,19 @@ def demo():
     assert not is_listing_page("https://b.com/en/products", {"url": "https://b.com/Default.asp", "links": many})
     assert not is_listing_page("https://b.com/en/products", {"url": "https://store.b2.com/us", "links": many})
     assert not is_listing_page("https://b.com/products", {"url": "https://b.com/products", "links": many[:3] * 5})
+    assert family_of("https://x.gov/Laws/Chapter_14A.html") == family_of("https://x.gov/Laws/Chapter_1.html") == "/Laws/Chapter_<n>.html"
+    assert family_of("https://x.gov/rsa/NHTOC-XIV.htm") == family_of("https://x.gov/rsa/NHTOC-I.htm")
+    assert family_of("https://x.com/products/dime-evo") == "/products/*"
+    links = [{"url": f"https://x.gov/ch/{i}/"} for i in range(5)] + [{"url": "https://x.gov/img/a1.png"}] * 4 + [{"url": "https://y.gov/ch/1/"}]
+    assert link_families(links, "https://x.gov/") == [("/ch/<n>/", [f"https://x.gov/ch/{i}/" for i in range(5)])]
+    assert link_families(links, "https://x.gov/", nav={"/ch/<n>/"}) == []
+    prods = [{"url": f"https://m.com/product/{x}"} for x in ("RB433AH", "hap_ac3", "crs354_48g", "cap_ax", "RB5009")]
+    assert link_families(prods, "https://m.com/") == [("/product/*", [p["url"] for p in prods])]
+    assert _family_rx("/ch/<n>/").search("/ch/14A/") and not _family_rx("/ch/<n>/").search("/ch/14/x/")
+    assert _spread(list(range(10)), 3) == [2, 5, 7]
+    assert prose("The courts enumerated in section 1-101 are courts of record and shall keep a seal.") > 0.6
+    assert prose("Home Products Support Contact Search Login Cart Menu Store Locator Careers News") < 0.3
+    assert _check_steps([{"reach": "https://x.gov/"}, {"links": "/ch/<n>/"}]) == ""
     print("scout: ok")
 
 

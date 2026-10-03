@@ -111,6 +111,7 @@ RESULT: fail | mikrotik.com/specs | nope 9 | NO_MATCH at step 1
 | `{"map": url, "filter": regex, "same": [[regex, repl], ...]}` | the site's own urls. `same` keeps the url whose last segment equals the input after both are rewritten. Last step: returns the list. Otherwise: the first url becomes `{url}`. |
 | `{"reach": "https://…/{input}" \| "{url}", "want": regex}` | reads a page with the full reader ladder (below) |
 | `{"find": regex}` | the first link on the page whose url or text matches becomes `{url}` |
+| `{"links": "/chapter/<n>/"}` | a link family from `families`. Last step: every matching link on the page. Otherwise: the first becomes `{url}`. |
 | `{"extract": {"field": regex}}` | group 1 of each regex. Every field must be found. |
 
 ## How Scout learns: a maze, a Markov chain, and rewrite rules
@@ -166,6 +167,46 @@ again on 2026-10-03 with Scout's own user agent, and only what held up was kept:
 
 Point `SCOUT_DB` at a shared path and a whole team, people and agents alike, learns from each other's runs.
 
+## Link families: walking a site with no sitemap
+
+These rules came from a sibling project: a recipe chain that rebuilt 16 US state codes from scratch, with 7 or 8 of
+every 8 sampled sections matching the held text word for word. Its hardest problems were about links, and the fixes
+were all general:
+
+- **A link's family is its path with the numbers taken out.** `Chapter_1.html` and `Chapter_14A.html` are one family,
+  and so are `NHTOC-I.htm` and `NHTOC-XIV.htm` (Roman numerals). Links with no numbers group as siblings under their
+  parent (`/products/*`). Only same-site families with 3 or more links count. Static assets, `#anchors` (each item is
+  read once, not once per anchor) and a page's link to itself are ignored.
+- **Sample across the family, not its first links.** A list opens with its odd items: a code's first chapter is often
+  a one-line "Repealed". Requiring 2 of 3 good samples at every level compounded into no path at all, so it is 2 at
+  the top and 1 below.
+- **Vote on what the family leads to, not on whichever sample came back first.** Section pages that also list their
+  neighbours made one sample look like an index; the majority got it right.
+- **Look deeper before trusting a weak match.** A page that looks like one item, but still has families leading down,
+  is walked further first.
+- **Rank by yield through every level:** links × share of good samples × what each yields below. Scoring one level at a
+  time made a five-page index outrank 89 chapters of sections.
+- **Tell content from menus by function words.** The density of *the, of, shall, any* separates sentences (≈0.35–0.5)
+  from navigation (≈0.15) where capitals and length could not. Every `reach` result carries this `prose` score.
+- **Skip families that lead to a different kind of document.** Statute pages link to the bills that enacted them, and
+  the chain followed them into scanned slip laws.
+
+`families(url, want?)` runs this walk and returns the ranked families, their samples, and a `recipe_hint` draft for
+`compile`. The `links` recipe step then lists a family's urls on sites with no sitemap.
+
+Live, on two sites (2026-10-03):
+
+| Start | Best chain found by sampling | Estimate | Compiled hint |
+|---|---|---|---|
+| Idaho statutes index | `Title<n>` (74 links, 5/5 samples are indexes) → `Title<n>/T<n>` (34 per title, 3/3 pages) | ≈2,516 chapter pages | `RESULT: ok … count=19; first=…/Title1/T1CH1` |
+| a MikroTik category page | `/product/*` (22 links, 5/5 pages) | 22 products | `RESULT: ok … count=22; first=…/product/hex_s_2025` |
+
+MikroTik added two rules the law sites never needed:
+- **A family the page above already shows is navigation.** Every MikroTik page carries the same category menu, and
+  without this rule the walk descended from the menu back into the menu.
+- **Siblings group under their parent first.** The number shape names the family only when one shape covers 80% of
+  them (`Title<n>`). `RB<n>` and `crs<n>_<n>_<n>_in` are both just `/product/*`.
+
 ## Errors that say what to do next
 
 When Scout fails, it returns an error `code`, a `message`, and `next_steps` written as concrete tool calls, plus the
@@ -188,6 +229,7 @@ When Scout fails, it returns an error `code`, a `message`, and `next_steps` writ
 | `scout(url, want?)` | big model | reaches the page, maps url patterns, finds the listing, reports what was learned |
 | `reach(url, want?, full?)` | big model | reads one page through the learned ladder |
 | `site_map(url, filter?)` | big model | the site's own urls and their patterns |
+| `families(url, want?, depth?)` | big model | which link families lead to good pages, by sampling and vote |
 | `compile(name, steps, examples, …)` | big model | tests a recipe and saves it, returns the small-model card |
 | `moves(action, …)` | big model | lists, proposes or retires moves |
 | `memory(host?)` | big model | reader order, routes, moves and recent failures for a host |
