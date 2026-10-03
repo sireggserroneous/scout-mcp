@@ -23,19 +23,23 @@ async def scout(url: str, want: str = "", full: bool = False) -> dict:
 
 
 @mcp.tool()
-async def reach(url: str, want: str = "", full: bool = False) -> dict:
+async def reach(url: str, want: str = "", full: bool = False, fresh: bool = False) -> dict:
     """Reach one page and judge whether it is good information. Tries the host's learned readers winner-first, then
     scored url rewrites and detail sub-pages. Returns ok, markdown (excerpt unless full=true), the trail `tried`, and on
-    failure an `error` {code, message, next_steps}."""
-    return await asyncio.to_thread(S.reach, url, want, full)
+    failure an `error` {code, message, next_steps}. A page read today comes from Scout's mirror (fresh=true reads it
+    again). When the site walls Scout, or is on hold, the latest Wayback Machine copy is read instead, and `archived`
+    says when it was captured."""
+    return await asyncio.to_thread(S.reach, url, want, full, 0, False, fresh)
 
 
 @mcp.tool()
-async def site_map(url: str, filter: str = "", limit: int = 500, fresh: bool = False) -> dict:
+async def site_map(url: str, filter: str = "", limit: int = 500, fresh: bool = False, archive: str = "auto") -> dict:
     """A site's real urls (robots.txt sitemaps, a polite link walk, the catalogue's root) with their url patterns.
     `filter` is a regex. A listing is reused for 12 hours; fresh=true lists the site again (only when it changed:
-    re-listing a whole site run after run is how crawlers get blocked). Use it instead of guessing paths."""
-    return await asyncio.to_thread(S.site_map, url, filter, limit, 20, fresh)
+    re-listing a whole site run after run is how crawlers get blocked). archive='only' lists the site from the Wayback
+    Machine's index without a single request to it; 'auto' does so when the site is on hold or listed nothing.
+    Use it instead of guessing paths."""
+    return await asyncio.to_thread(S.site_map, url, filter, limit, 20, fresh, archive)
 
 
 @mcp.tool()

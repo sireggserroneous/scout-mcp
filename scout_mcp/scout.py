@@ -29,8 +29,15 @@ CRAWL4AI_TOKEN = os.environ.get("CRAWL4AI_TOKEN", "")
 MIN_INTERVAL = float(os.environ.get("SCOUT_MIN_INTERVAL", "1.0"))   # seconds between requests to one host, at least
 
 ENGINE_ORDER = ["direct", "firecrawl", "crawl4ai", "browser"]       # cheapest first, when a host has taught us nothing
+# The Wayback Machine: a public archive of the site, read when the site itself cannot or should not be asked (Depot,
+# 2026-10-03: 1,543 of AMD's product pages, newest a day old, while amd.com blocked us). It never becomes a host's
+# winning reader, so live reading resumes when the site allows it; robots.txt still binds what Scout reads from it.
+ARCHIVE = os.environ.get("SCOUT_ARCHIVE", "https://web.archive.org").rstrip("/")
+ARCHIVE_PACE = 2.0           # seconds between requests to the archive: it is a library, not a CDN
+ARCHIVE_WHEN = {"blocked", "rate_limited", "silent_refusal", "challenge", "refused", "login_wall", "network", "server_error"}
+MIRROR_DAYS = float(os.environ.get("SCOUT_MIRROR_DAYS", "1"))   # a good page is re-read from disk this long: download once
 RENDERERS = {"firecrawl", "crawl4ai", "browser"}
-TIMEOUT = {"direct": 20, "firecrawl": 45, "crawl4ai": 45, "browser": 45}
+TIMEOUT = {"direct": 20, "firecrawl": 45, "crawl4ai": 45, "browser": 45, "archive": 60}
 DEAD_TTL = 6 * 3600          # a move that failed on a host goes to the back for this long; a block today may be gone tomorrow
 PRUNE_TRIES = 5              # a register move that lost its first five tries is retired
 MIN_GOOD = 300               # fewer readable chars than this is not content
@@ -363,17 +370,20 @@ def failures(host=None, limit=50):
 _ROBOTS, _LAST = {}, {}
 
 
-def robots(url):
+def robots(url, archived=False):
     """(parser, state) for the url's site, cached an hour. RFC 9309: a 4xx robots.txt means no rules, a 5xx means
-    stay out until it answers."""
+    stay out until it answers. archived=True reads the site's rules from the archive, for a site not to be asked."""
     p = urllib.parse.urlsplit(url)
     root = f"{p.scheme}://{p.netloc}"
-    hit = _ROBOTS.get(root)
+    hit = _ROBOTS.get(root) or (_ROBOTS.get(root + "#archive") if archived else None)
     if hit and time.time() - hit[0] < 3600:
         return hit[1], hit[2]
     rp, state = urllib.robotparser.RobotFileParser(root + "/robots.txt"), "ok"
+    where = f"{ARCHIVE}/web/{time.strftime('%Y%m%d%H%M%S', time.gmtime())}id_/{root}/robots.txt" if archived else root + "/robots.txt"
+    if archived:
+        _polite(where)
     try:
-        with urllib.request.urlopen(urllib.request.Request(root + "/robots.txt", headers=HEADERS), timeout=15) as r:
+        with urllib.request.urlopen(urllib.request.Request(where, headers=HEADERS), timeout=15 if not archived else 60) as r:
             rp.parse(r.read(500_000).decode("utf-8", "replace").splitlines())
     except urllib.error.HTTPError as e:
         state = "unreachable" if e.code >= 500 else "none"
@@ -381,8 +391,8 @@ def robots(url):
     except Exception:  # noqa: BLE001 — ponytail: no answer at all = no rules; the page fetch will report the network error
         state = "none"
         rp.parse([])
-    _ROBOTS[root] = (time.time(), rp, state)
-    return rp, state
+    _ROBOTS[root + ("#archive" if archived else "")] = (time.time(), rp, state + (" (archived copy)" if archived else ""))
+    return rp, state + (" (archived copy)" if archived else "")
 
 
 def _polite(url):
@@ -391,7 +401,8 @@ def _polite(url):
     if not rp.can_fetch(UA, url):
         return False, state
     host = urllib.parse.urlsplit(url).netloc
-    gap = max(MIN_INTERVAL, min(float(rp.crawl_delay(UA) or 0), 30.0), float(memory(_host(url))["route"].get("min_interval") or 0))
+    gap = max(MIN_INTERVAL, min(float(rp.crawl_delay(UA) or 0), 30.0), float(memory(_host(url))["route"].get("min_interval") or 0),
+              ARCHIVE_PACE if _host(url) == _host(ARCHIVE) else 0)
     with _lock:
         wait = _LAST.get(host, 0) + gap - time.time()
         _LAST[host] = time.time() + max(wait, 0)
@@ -510,12 +521,81 @@ def _have_browser():
         return False
 
 
-ENGINES = {"direct": _direct, "firecrawl": _firecrawl, "crawl4ai": _crawl4ai, "browser": _browser}
+def _archive(url, timeout):
+    """The latest Wayback Machine copy of `url`, as the site served it (the id_ form: no archive toolbar), with links
+    resolved against the site's own address. 404 means the archive has no copy."""
+    copy = f"{ARCHIVE}/web/{time.strftime('%Y%m%d%H%M%S', time.gmtime())}id_/{url}"
+    _polite(copy)
+    try:
+        with urllib.request.urlopen(urllib.request.Request(copy, headers=HEADERS), timeout=timeout) as r:
+            raw, ctype, final = r.read(MAX_BYTES), r.headers.get("Content-Type", ""), r.geturl()
+    except urllib.error.HTTPError as e:
+        raise Status(e.code) from None
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    m = re.search(r"/web/(\d{14})id_/", final)
+    page = _convert(raw, ctype, url)
+    page.update(final_url=url, archived={"captured": (f"{m.group(1)[:4]}-{m.group(1)[4:6]}-{m.group(1)[6:8]}" if m else None), "copy": final})
+    return page
+
+
+def wayback_urls(url, limit=20000, years=2):
+    """The site's pages the Wayback Machine holds (captured with status 200 in the last `years`), from its public index:
+    a full listing of a site without a single request to the site."""
+    p = urllib.parse.urlsplit(url if "://" in url else "https://" + url)
+    prefix = p.path if p.path not in ("", "/") else ""
+    q = urllib.parse.urlencode([("url", p.netloc + prefix + "*"), ("output", "json"), ("filter", "statuscode:200"),
+                                ("filter", "mimetype:text/html"), ("collapse", "urlkey"), ("fl", "original"),
+                                ("limit", str(int(limit))), ("from", str(time.gmtime().tm_year - years))])
+    _polite(f"{ARCHIVE}/cdx/")
+    with urllib.request.urlopen(urllib.request.Request(f"{ARCHIVE}/cdx/search/cdx?{q}", headers=HEADERS), timeout=180) as r:
+        rows = json.loads(r.read() or b"[]")[1:]
+    out = []
+    for (u,) in rows:
+        sp = urllib.parse.urlsplit(u)
+        qs = [(k, v) for k, v in urllib.parse.parse_qsl(sp.query) if not re.match(r"(?i)utm_|fbclid|gclid|mc_|ref$", k)]
+        out.append(urllib.parse.urlunsplit(("https", sp.netloc.lower().removesuffix(":80").removesuffix(":443"), sp.path,
+                                            urllib.parse.urlencode(qs), "")))
+    return list(dict.fromkeys(out))
+
+
+def _mirror_path(url):
+    import hashlib
+    return DB_PATH.parent / "mirror" / _host(url) / (hashlib.sha256(url.encode()).hexdigest()[:24] + ".json")
+
+
+def _mirror_get(url):
+    """A good page read in the last MIRROR_DAYS: re-runs and recipe compiles read the copy, not the site."""
+    if MIRROR_DAYS <= 0:
+        return None
+    path = _mirror_path(url)
+    try:
+        if time.time() - path.stat().st_mtime < MIRROR_DAYS * 86400:
+            return json.loads(path.read_text())
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _mirror_put(url, page, reader):
+    if MIRROR_DAYS <= 0:
+        return
+    try:
+        path = _mirror_path(url)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        keep = {k: page.get(k) for k in ("markdown", "title", "links", "final_url", "archived")}
+        keep["markdown"] = (keep["markdown"] or "")[:2_000_000]
+        path.write_text(json.dumps({**keep, "reader": reader}))
+    except OSError:
+        pass
+
+
+ENGINES = {"direct": _direct, "firecrawl": _firecrawl, "crawl4ai": _crawl4ai, "browser": _browser, "archive": _archive}
 
 
 def readers():
     return [n for n, on in (("direct", True), ("firecrawl", bool(FIRECRAWL)), ("crawl4ai", bool(CRAWL4AI)),
-                            ("browser", _have_browser())) if on]
+                            ("browser", _have_browser()), ("archive", ARCHIVE.lower() not in ("", "off"))) if on]
 
 
 # ── the goal test ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -586,11 +666,48 @@ def _host(url):
     return urllib.parse.urlsplit(url).netloc.lower()
 
 
-def _try_readers(url, want, tried):
-    """Walk the host's readers, best first. Returns (good page, reader) or (None, best real page or None)."""
+def _try_readers(url, want, tried, fresh=False, archive_only=False):
+    """The mirror, then the host's live readers best first, then the archive when the live site walled or failed.
+    Returns (good page, reader) or (None, best real page or None)."""
     host, best = _host(url), None
+    mp = None if fresh else _mirror_get(url)
+    if mp:
+        verdict = judge(mp, want)
+        tried.append({"url": url, "reader": "mirror", "outcome": verdict, "chars": len(mp.get("markdown") or ""),
+                      "copy_of": mp.get("reader")})
+        if verdict == "ok":
+            return mp, "mirror"
+        return None, {**mp, "reader": "mirror"}       # the copy is today's page: asking the site again would say the same
+    page, best = (None, None) if archive_only else _live(url, want, tried, host)
+    if page:
+        return page, tried[-1]["reader"]
+    live = [t["outcome"] for t in tried if t["url"] == url]
+    if "archive" in readers() and (archive_only or (not best and live and live[-1] in ARCHIVE_WHEN)):
+        rp, _ = robots(url, archived=archive_only)
+        if not rp.can_fetch(UA, url):
+            tried.append({"url": url, "reader": "archive", "outcome": "robots_disallowed"})
+            return None, best
+        try:
+            page = _archive(url, TIMEOUT["archive"])
+        except Exception as e:  # noqa: BLE001
+            tried.append({"url": url, "reader": "archive", "outcome": "no_archive", "detail": str(e)[:120]})
+            return None, best
+        verdict = judge(page, want)
+        tried.append({"url": url, "reader": "archive", "outcome": verdict, "chars": len(page.get("markdown") or ""),
+                      "captured": page["archived"]["captured"]})
+        if verdict in ("ok", "want_miss"):
+            _mirror_put(url, page, "archive")
+        if verdict == "ok":
+            return page, "archive"
+        if verdict == "want_miss":
+            best = {**page, "reader": "archive"}
+    return None, best
+
+
+def _live(url, want, tried, host):
+    best = None
     for name in order(host):
-        if name not in readers():
+        if name not in readers() or name == "archive":
             continue
         allowed, _ = _polite(url)
         if not allowed:
@@ -614,6 +731,8 @@ def _try_readers(url, want, tried):
             continue
         verdict = judge(page, want)
         tried.append({"url": url, "reader": name, "outcome": verdict, "chars": len(page.get("markdown") or "")})
+        if verdict in ("ok", "want_miss"):
+            _mirror_put(url, page, name)
         if verdict == "blocked":
             tried[-1]["detail"] = " ".join((page.get("markdown") or "").split())[:200]
             tried[-1]["hold"] = _throttled(host, "blocked", None, page.get("markdown") or "")
@@ -626,7 +745,7 @@ def _try_readers(url, want, tried):
             return page, name
         if real and best is None:
             best = {**page, "reader": name}
-    mine = [t["outcome"] for t in tried if t["url"] == url]
+    mine = [t["outcome"] for t in tried if t["url"] == url and t["reader"] not in ("archive", "mirror")]
     if len(mine) >= 2 and all(o == "silent_refusal" for o in mine):
         tried[-1]["hold"] = _throttled(host, "silent_refusal", None, tried[-1].get("detail") or "")   # every reader stalled: stop knocking
     return None, best
@@ -645,15 +764,21 @@ def _want_links(page, want, limit=3):
     return out[:limit]
 
 
-def reach(url, want="", full=False, _depth=0, _links=False):
+def reach(url, want="", full=False, _depth=0, _links=False, fresh=False):
     """Reach good information at `url`. `want` is a regex the page must carry (a model number, 'price|\\$', a heading)."""
     if "://" not in url:
         url = "https://" + url
     host, tried = _host(url), []
     h = _held(host)
-    if h:
-        return {"ok": False, "url": url, "error": _held_error(host, h), "tried": []}
-    page, reader = _try_readers(url, want, tried)
+    if h:      # the site is not to be asked: its archive may still answer, without a single request to the site
+        page, reader = _try_readers(url, want, tried, fresh, archive_only=True) if "archive" in readers() else (None, None)
+        if not page:
+            err = _held_error(host, h)
+            if any(t["outcome"] == "no_archive" for t in tried):
+                err["message"] += " The Wayback Machine has no copy of this page either."
+            return {"ok": False, "url": url, "error": err, "tried": tried}
+    else:
+        page, reader = _try_readers(url, want, tried, fresh)
     via = None
     if not page and _depth == 0 and not any(t["outcome"] in ("robots_disallowed", "rate_limited", "blocked") for t in tried):
         best = reader if isinstance(reader, dict) else None
@@ -685,10 +810,11 @@ def reach(url, want="", full=False, _depth=0, _links=False):
                 break
     if page:
         md = page.get("markdown") or ""
-        if (memory(host)["route"].get("hold") or {}).get("until"):
+        if (memory(host)["route"].get("hold") or {}).get("until") and reader not in ("archive", "mirror"):
             hold(host, lift=True)     # the probe after an automatic hold got through; the slower pace stays
         return {"ok": True, "url": page.get("final_url") or url, "requested_url": url, "via": via,
                 "reader": [t for t in tried if t["outcome"] == "ok"][-1]["reader"], "title": page.get("title", ""),
+                **({"archived": page["archived"]} if page.get("archived") else {}),
                 "chars": len(md), "prose": prose(md), "markdown": excerpt(md, want, full), "tried": tried, "learned": memory(host),
                 **({"links": page.get("links") or []} if _links else {})}
     best = reader if isinstance(reader, dict) else None
@@ -1099,10 +1225,12 @@ def _listing_cache(url, urls=None, how=""):
         return None
 
 
-def site_map(url, filter="", limit=500, walk=20, fresh=False):
+def site_map(url, filter="", limit=500, walk=20, fresh=False, archive="auto"):
     """The site's real urls: robots.txt sitemaps, a polite link walk when they are thin, and the catalogue's own root
     (found by the scored locale x root parts) when nothing listed so far looks like a catalogue. A listing is reused for
-    12 hours unless fresh=True: re-listing a whole site run after run is how crawlers get blocked."""
+    12 hours unless fresh=True: re-listing a whole site run after run is how crawlers get blocked.
+    archive: "auto" lists from the Wayback Machine's index when the site is held or listed nothing; "only" lists from
+    the index alone, without a single request to the site (robots rules from its archived robots.txt); "off" never."""
     if "://" not in url:
         url = "https://" + url
     p = urllib.parse.urlsplit(url)
@@ -1113,6 +1241,19 @@ def site_map(url, filter="", limit=500, walk=20, fresh=False):
         return _site_map_out(url, root, host, urls, filter, limit, f"reused the listing from {int((time.time() - at) / 60)} min ago ({how0}); "
                              "fresh=true lists again", "cached")
     h = _held(host)
+    if archive == "only" or (h and archive != "off" and "archive" in readers()):
+        rp, state = robots(url, archived=True)
+        try:
+            urls = [u for u in wayback_urls(url) if rp.can_fetch(UA, u)]
+        except Exception as e:  # noqa: BLE001
+            urls, h = [], h or {"reason": f"archive index unavailable: {type(e).__name__}", "by": "scout"}
+        how = (f"wayback index: {len(urls)} archived pages, no request to the site" + (" (the site is on hold)" if h else ""))
+        if urls:
+            _listing_cache(url, urls, how)
+        out = _site_map_out(url, root, host, urls, filter, limit, how, state)
+        if not urls and h:
+            out["error"] = _held_error(host, h) if h.get("since") else {"code": "NO_URLS", "message": h["reason"], "next_steps": []}
+        return out
     if h:
         return {"ok": False, "site": root, "count": 0, "urls": [], "patterns": [], "robots": None, "how": "on hold",
                 "error": _held_error(host, h)}
@@ -1134,7 +1275,13 @@ def site_map(url, filter="", limit=500, walk=20, fresh=False):
             before = len(urls)
             n = _walk_links([lst["url"]], host, on, rp, walk, urls)
             how.append(f"catalogue root {lst['url']}: opened {n} page(s), {len(urls) - before} new urls")
-    if urls and not _held(host):
+    if not urls and archive == "auto" and "archive" in readers():     # the live site listed nothing: its archive may
+        try:
+            urls = [u for u in wayback_urls(url) if rp.can_fetch(UA, u)]
+            how.append(f"wayback index: {len(urls)} archived pages")
+        except Exception as e:  # noqa: BLE001
+            how.append(f"wayback index unavailable ({type(e).__name__})")
+    if urls:
         _listing_cache(url, urls, "; ".join(how))
     return _site_map_out(url, root, host, urls, filter, limit, "; ".join(how), state)
 
@@ -1505,7 +1652,8 @@ def run(name, input="", recipe=None):
             if not r["ok"]:
                 return fail(r["error"]["code"], i, r["error"]["next_steps"][0])
             url, page = r["url"], r
-            out = {"url": url, "title": r.get("title", "")[:80]}
+            out = {"url": url, "title": r.get("title", "")[:80],
+                   **({"archived": r["archived"]["captured"]} if r.get("archived") else {})}   # read from the Wayback copy of that day
         elif op == "find":
             rx = re.compile(_fill(st["find"], input, url, True), re.I)
             hit = next((l["url"] for l in (page or {}).get("links", []) if rx.search(l["url"]) or rx.search(l.get("text", ""))), None)
@@ -1756,6 +1904,12 @@ def demo():
     _listing_cache("https://c.example", ["https://c.example/p/1", "https://c.example/p/2"], "test")
     m = site_map("https://c.example")
     assert m["robots"] == "cached" and m["count"] == 2 and "reused the listing" in m["how"], m
+    p_ = {"markdown": "x" * 400, "title": "T", "links": [], "final_url": "https://m.example/p"}
+    _mirror_put("https://m.example/p", p_, "direct")
+    tr = []
+    pg, rd = _try_readers("https://m.example/p", "", tr)
+    assert rd == "mirror" and tr[0]["copy_of"] == "direct", tr
+    assert _try_readers("https://m.example/p", "zzz", [])[0] is None, "a want-miss on today's copy does not ask the site again"
     print("scout: ok")
 
 

@@ -303,6 +303,33 @@ The sibling crawler's scout went after AMD's catalogue, and every mistake it mad
   reference (Akamai Reference #, Cloudflare Ray ID) now counts as the visitor half of a block, so the host is held,
   not retried.
 
+## Download once, read from the archive
+
+Also from the sibling crawler: the way to map a whole site without loading it is to ask the library that already
+copied it. The Wayback Machine held 1,543 of AMD's product pages, the newest a day old, while amd.com refused every
+request.
+
+- **Listing from the archive's index.** `site_map(url, archive='only')` lists a site from the Wayback Machine's public
+  index without a single request to the site. Robots rules come from the site's archived robots.txt. With the default
+  `archive='auto'`, the index is used when the site is on hold or listed nothing. amd.com's product section: 1,816
+  urls in 12 seconds.
+- **Reading from the archive.** When a site walls Scout (blocked, a silent refusal, a challenge, a refusal, a login,
+  or down), the next rung is the latest archived copy, as the site served it. A held site is read from the archive
+  only, with no contact with the site at all. Every result says so: `archived: {captured: 2026-08-21, copy: …}`, and
+  recipe RESULT lines carry `archived=<date>`. The url stays the site's own, so provenance is honest.
+- **The archive is never a host's winning reader.** Live reading resumes as soon as the site allows it, and robots.txt
+  still binds: a path the site disallows is not read from its archive either. The archive itself is paced at one
+  request every 2 seconds.
+- **A local mirror.** Every good page is kept on disk for a day (`SCOUT_MIRROR_DAYS`). Re-runs, parser fixes and recipe
+  compiles read the copy, not the site; `reach(fresh=true)` reads it again. Scout's pace was already a promise: it only
+  ever slows down for a host, never speeds back up.
+
+It compiles like any other recipe. `amd.com/processor-specs` ships in the book, built entirely from archived pages:
+
+```
+RESULT: ok | amd.com/processor-specs | EPYC 9575F | url=https://www.amd.com/en/products/processors/server/epyc/9005-series/amd-epyc-9575f.html; title=AMD EPYC™ 9575F; archived=2026-07-10; cores=64; threads=128; boost=Up to 5 GHz; tdp=400W; socket=SP5; launched=10/10/2024
+```
+
 ## Errors that say what to do next
 
 When Scout fails, it returns an error `code`, a `message`, and `next_steps` written as concrete tool calls, plus the
@@ -344,6 +371,8 @@ Give the small model only `run`, or the CLI. One tool means it has nothing to ch
 | `SCOUT_DB` | `~/.local/share/scout-mcp/scout.db` |
 | `SCOUT_USER_AGENT` | `ScoutMCP/<version> (+https://github.com/sireggserroneous/scout-mcp)` |
 | `SCOUT_MIN_INTERVAL` | `1.0` seconds between requests to one host |
+| `SCOUT_MIRROR_DAYS` | `1`: how long a good page is re-read from disk (`0` turns the mirror off) |
+| `SCOUT_ARCHIVE` | `https://web.archive.org` (`off` to never read archived copies) |
 | `SCOUT_KEYS_FILE` | `~/.config/scout-mcp/keys.env` (mode 600), next to `SCOUT_KEY_<NAME>` env vars |
 | `FIRECRAWL_URL`, `FIRECRAWL_API_KEY`, `CRAWL4AI_URL`, `CRAWL4AI_TOKEN` | unset |
 
