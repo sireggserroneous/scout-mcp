@@ -275,6 +275,26 @@ The book ships with the official routes for 21 sites that challenged Scout, rese
 Several "challenged" sites serve their own APIs and feeds without any challenge. A wall in front of the pages is
 often not a wall in front of the data.
 
+## Lessons from a big catalogue: AMD
+
+The sibling crawler's scout went after AMD's catalogue, and every mistake it made became a general rule:
+
+- **A wall can be silent.** From some networks amd.com answers no status at all: the plain fetch stalls until it
+  times out, and the browser's HTTP/2 stream is reset. Scout used to call that `NETWORK` and suggest checking the
+  spelling. A stall or reset from a host that resolves is now `SILENT_REFUSAL`: the site's edge refusing this client.
+  It is treated as a wall (official route first, the host held so nothing keeps knocking), not as a typo.
+- **A map has to work when plain fetches don't.** `site_map` reads sitemaps and walks links through the host's learned
+  reader, not just a plain fetch.
+- **Map from the catalogue's root when nothing else looks like a catalogue.** AMD's map ran out on blog posts. Walking
+  `/en/products` found 1,561 product pages. When the sitemap and the walk turn up no catalogue-shaped urls, Scout finds
+  the root with its scored locale × root parts and walks from there. That way the step is a scored move, not a
+  hard-wired rule.
+- **Editorial sections are never the items.** The scout picked `/blogs/` and `/newsroom/` as AMD's product pattern and
+  "proved" 689 blog posts. Blog, news, press, events, careers, investors and similar patterns are flagged `editorial`
+  and ranked last in `site_map` and `families`.
+- **A title of `=====` is not a title.** It falls back to the page's first real heading.
+- **"… Series" is a category.** So are "… Family" and "… Lineup". Recipes pick their examples from single items.
+
 ## Errors that say what to do next
 
 When Scout fails, it returns an error `code`, a `message`, and `next_steps` written as concrete tool calls, plus the
@@ -285,7 +305,7 @@ When Scout fails, it returns an error `code`, a `message`, and `next_steps` writ
 | `NOT_FOUND` | `site_map` instead of guessing paths |
 | `WANT_MISS` | loosening `want`, a `detail_suffix` move, `site_map` |
 | `JS_SHELL` / `THIN_CONTENT` | adding a rendering reader, the site's JSON endpoints, a print view |
-| `REFUSED` / `CHALLENGE_WALL` / `LOGIN_REQUIRED` | the site's API, an archive copy as a `url_rewrite` move, the same document elsewhere |
+| `REFUSED` / `SILENT_REFUSAL` / `CHALLENGE_WALL` / `LOGIN_REQUIRED` | the site's official route, its partner program, the same information published elsewhere |
 | `BLOCKED` / `HELD` | who to email to lift the block, `hold` to keep every agent off until they answer, when Scout probes |
 | `ROBOTS_DISALLOWED` / `RATE_LIMITED` | an official feed, waiting for `Retry-After` |
 | `TLS_ERROR` / `NETWORK` / `SERVER_ERROR` | the cause, retrying later |

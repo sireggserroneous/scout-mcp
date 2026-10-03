@@ -54,6 +54,16 @@ _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 HOLD_S = 1800                # an automatic hold after a block: probe once when it ends, double it if still blocked
 _JS_NEEDED = re.compile(r"enable javascript|requires javascript|please turn on javascript|you need to enable javascript", re.I)
 _LISTING_WORDS = re.compile(r"(?i)/(products?|catalog(ue)?|shop|collections?|all-products|docs|documentation|blog|articles|library)(/|$|\.)")
+# Editorial sections are never items: amd.com's scout picked /blogs/ and /newsroom/ as its product pattern and a dry run
+# "proved" 689 blog posts as products (Depot, 2026-10-03). Flagged and sorted last wherever Scout ranks url shapes.
+_EDITORIAL = re.compile(r"(?i)/(blogs?|news(room)?|press(-?releases?|room)?|events?|careers?|jobs|investors?|about(-us)?|media|"
+                        r"webinars?|videos?|podcasts?|stories|insights|articles|authors?|tags?)(/|$)")
+_CATALOG = re.compile(r"(?i)/(products?|catalog(ue)?|shop|store|collections?|parts?|items?)(/|$|\.)")
+# A stall or a reset from a host that resolves is its edge refusing this client quietly, not a network fault: amd.com's
+# edge timed the plain fetch out and reset the browser's HTTP/2 stream (2026-10-03). Scout said "check the url spelling".
+_STALL = re.compile(r"timed out|ERR_HTTP2_PROTOCOL_ERROR|ERR_CONNECTION_RESET|ERR_EMPTY_RESPONSE|ERR_CONNECTION_CLOSED|"
+                    r"Connection reset|RemoteDisconnected|EOF occurred|Connection aborted", re.I)
+_DNS = {}
 _FILE = re.compile(r"(?i)\.(jpg|jpeg|png|gif|svg|webp|css|js|ico|woff2?|ttf|mp4|mp3|zip)(\?|$)")
 
 
@@ -191,11 +201,11 @@ def _throttled(host, kind, retry_after, text):
         secs = float(retry_after or 0)
     except ValueError:
         secs = 0.0
-    secs = max(secs, HOLD_S if kind == "blocked" else 120.0)
+    secs = max(secs, HOLD_S if kind in ("blocked", "silent_refusal") else 120.0)
     if prev.get("until"):
         secs = max(secs, 2 * (prev["until"] - prev["since"]))
     secs = min(secs, 86400.0)
-    pace = max(5.0 if kind == "blocked" else 2.0, 2 * float(memory(host)["route"].get("min_interval") or MIN_INTERVAL))
+    pace = max(5.0 if kind in ("blocked", "silent_refusal") else 2.0, 2 * float(memory(host)["route"].get("min_interval") or MIN_INTERVAL))
     email = _EMAIL.search(text or "")
     hold(host, reason=f"{kind}: {' '.join((text or '').split())[:200]}", until=time.time() + secs, min_interval=pace,
          contact=email.group(0) if email else None, by="scout")
@@ -209,6 +219,17 @@ def _held_error(host, h):
             "next_steps": ([f"The site asked to be contacted at {_hold_contact(host)}: a person can request the unblock there."] if _hold_contact(host) else []) +
                           [f"Work on another host meanwhile. hold('{host}', lift=true) once the site has answered.",
                            f"memory('{host}') shows the hold and the pace Scout will use there."]}
+
+
+def _resolves(host):
+    if host not in _DNS:
+        import socket
+        try:
+            socket.getaddrinfo(host.split(":")[0], 443)
+            _DNS[host] = True
+        except OSError:
+            _DNS[host] = False
+    return _DNS[host]
 
 
 def _blocked(text):
@@ -397,6 +418,9 @@ def _convert(raw, ctype, url):
     for t in soup(["script", "style", "noscript", "nav", "header", "footer", "aside", "form", "iframe", "svg"]):
         t.decompose()
     title = " ".join(soup.title.string.split()) if soup.title and soup.title.string else ""
+    if not re.search(r"[A-Za-z0-9]", title):     # no title, or one like "=====": the page's first real heading
+        hd = soup.find(["h1", "h2"])
+        title = " ".join(hd.get_text(" ").split())[:200] if hd else title
     body = soup.find("main") or soup.find("article") or soup.body or soup
     md = re.sub(r"\n{3,}", "\n\n", markdownify(str(body), heading_style="ATX", bullets="-")).strip()
     shell = (len(md) < MIN_GOOD and scripts >= 3) or (len(md) < 2000 and bool(_JS_NEEDED.search(md)))
@@ -569,6 +593,8 @@ def _try_readers(url, want, tried):
             page = ENGINES[name](url, TIMEOUT[name])
         except Exception as e:  # noqa: BLE001
             out = _outcome(e)
+            if out == "network" and _STALL.search(str(e)) and _resolves(host):
+                out = "silent_refusal"
             tried.append({"url": url, "reader": name, "outcome": out, "status": getattr(e, "status", None),
                           "retry_after": getattr(e, "retry_after", None), "detail": (getattr(e, "body", "") or str(e))[:200]})
             if out in ("blocked", "rate_limited"):
@@ -593,6 +619,9 @@ def _try_readers(url, want, tried):
             return page, name
         if real and best is None:
             best = {**page, "reader": name}
+    mine = [t["outcome"] for t in tried if t["url"] == url]
+    if len(mine) >= 2 and all(o == "silent_refusal" for o in mine):
+        tried[-1]["hold"] = _throttled(host, "silent_refusal", None, tried[-1].get("detail") or "")   # every reader stalled: stop knocking
     return None, best
 
 
@@ -873,7 +902,7 @@ def _access_steps(host, code):
 
 
 # ── actionable errors: what failed, why, and the next call that could fix it ─────────────────────────────────────────
-_PRIORITY = ["robots_disallowed", "blocked", "rate_limited", "challenge", "refused", "login_wall", "not_found", "error_page",
+_PRIORITY = ["robots_disallowed", "blocked", "rate_limited", "challenge", "refused", "silent_refusal", "login_wall", "not_found", "error_page",
              "js_shell", "thin", "empty", "want_miss", "tls", "network", "server_error", "reader_missing", "http_error"]
 
 
@@ -948,6 +977,14 @@ def diagnose(url, want, tried, best=None):
         "tls": ("TLS_ERROR", f"TLS to {host} failed: {next((t.get('detail') for t in tried if t['outcome'] == 'tls'), '')}",
             ["'unable to get local issuer certificate' usually means the server omits its intermediate certificate; "
              "install it in your trust store from the certificate's AIA url, or report it to the site. Scout never disables verification."]),
+        "silent_refusal": ("SILENT_REFUSAL", f"{host} resolves and takes connections, but every request stalled or was reset "
+                           f"({next((t.get('detail') or '' for t in tried if t['outcome'] == 'silent_refusal'), '')[:90]}). That is the "
+                           "site's edge refusing this client quietly, not a network fault."
+                           + (" Scout put the host on hold so nothing keeps knocking." if _held(host) else ""),
+            ["The site's own route is the way in: an API, a feed, a bulk download, or its partner or dealer program.",
+             f"Ask {host} for access through its contact or partner page; say what reads the site and how slowly.",
+             "The same information is often published elsewhere: distributors, registries, the maker's documentation CDN.",
+             "Retrying in a loop will not help: a stall is a refusal."]),
         "network": ("NETWORK", f"Could not reach {host}: {next((t.get('detail') for t in tried if t['outcome'] == 'network'), '')}",
             ["Check the url spelling and that the site is up (DNS, timeouts).", "Retry later if the site is slow."]),
         "server_error": ("SERVER_ERROR", f"{host} answered HTTP {status}.", ["Server errors are usually brief: retry later."]),
@@ -955,7 +992,7 @@ def diagnose(url, want, tried, best=None):
         "http_error": ("HTTP_ERROR", f"{host} answered HTTP {status}.", [sitemap]),
     }
     code, message, steps = T.get(first, ("UNKNOWN", "No reader produced good information.", [sitemap]))
-    if code in ("CHALLENGE_WALL", "REFUSED", "LOGIN_REQUIRED", "BLOCKED", "ROBOTS_DISALLOWED", "JS_SHELL", "THIN_CONTENT"):
+    if code in ("CHALLENGE_WALL", "REFUSED", "SILENT_REFUSAL", "LOGIN_REQUIRED", "BLOCKED", "ROBOTS_DISALLOWED", "JS_SHELL", "THIN_CONTENT"):
         steps = _access_steps(host, code) + steps
         if not access(host) and code != "BLOCKED":
             steps = steps + [f"No official route is recorded for {host}. Look for its API, developer program or bulk download, "
@@ -990,16 +1027,30 @@ def _get(url, timeout=20):
     return raw
 
 
+def _sitemap_text(sm):
+    """A sitemap's text: the plain fetch, or the host's learned reader when the plain fetch is refused (amd.com answers
+    only a rendering reader; its sitemap read 0 through the plain fetch, 2026-10-03)."""
+    try:
+        raw = _get(sm)
+        if raw:
+            return raw.decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        pass
+    if _held(_host(sm)):
+        return ""
+    r = reach(sm, _depth=1, full=True)
+    return r.get("markdown") or "" if r["ok"] else ""
+
+
 def _sitemap_urls(sm, seen, cap, depth=0):
     if sm in seen or len(seen) > 25 or depth > 2:
         return []
     seen.add(sm)
-    try:
-        body = (_get(sm) or b"").decode("utf-8", "replace")
-    except Exception:  # noqa: BLE001
-        return []
+    body = _sitemap_text(sm)
     locs = [x.strip() for x in re.findall(r"<loc>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</loc>", body, re.S)]
-    if "<sitemapindex" in body:
+    if not locs and body:                  # read through a renderer: the tags are gone, the urls are not
+        locs = list(dict.fromkeys(u.rstrip(".,)") for u in re.findall(r"https?://[^\s<>\"')\]]+", body)))
+    if "<sitemapindex" in body or (locs and all(re.search(r"(?i)sitemap|\.xml(\.gz)?$", u) for u in locs)):
         out = []
         for child in locs:
             out += _sitemap_urls(child, seen, cap, depth + 1)
@@ -1009,8 +1060,27 @@ def _sitemap_urls(sm, seen, cap, depth=0):
     return locs
 
 
+def _walk_links(starts, host, on, rp, budget, urls):
+    """Breadth first over the site's own links from `starts`, through the host's learned reader, politely."""
+    frontier, opened = list(starts), set()
+    while frontier and len(opened) < budget:
+        u = frontier.pop(0)
+        if u in opened or not rp.can_fetch(UA, u) or _held(host):
+            continue
+        opened.add(u)
+        r = reach(u, _depth=1, _links=True)
+        if not r["ok"]:
+            continue
+        for l in r.get("links") or []:
+            v = l["url"]
+            if on(v) and not _FILE.search(v) and v not in urls:
+                urls.append(v); frontier.append(v)
+    return len(opened)
+
+
 def site_map(url, filter="", limit=500, walk=20):
-    """The site's real urls: robots.txt sitemaps first, then a polite link walk when they are thin."""
+    """The site's real urls: robots.txt sitemaps, a polite link walk when they are thin, and the catalogue's own root
+    (found by the scored locale x root parts) when nothing listed so far looks like a catalogue."""
     if "://" not in url:
         url = "https://" + url
     p = urllib.parse.urlsplit(url)
@@ -1027,44 +1097,33 @@ def site_map(url, filter="", limit=500, walk=20):
     how = [f"sitemaps: {len(urls)} urls from {len(seen)} file(s)"]
     on = lambda u: urllib.parse.urlsplit(u).netloc.lower().removeprefix("www.") == host.removeprefix("www.")
     urls = [u for u in dict.fromkeys(urls) if on(u) and rp.can_fetch(UA, u)]
-    if len(urls) < 50 and walk:      # thin or no sitemap: walk the site's own links, breadth first, politely
-        frontier, opened = [url, root + "/"], set()
-        while frontier and len(opened) < walk:
-            u = frontier.pop(0)
-            if u in opened or not rp.can_fetch(UA, u):
-                continue
-            opened.add(u)
-            if _held(host):
-                break
-            try:
-                page = _direct(u, 20)
-            except Status as e:
-                if _outcome(e) in ("blocked", "rate_limited"):
-                    _throttled(host, _outcome(e), e.retry_after, e.body)
-                    break
-                continue
-            except Exception:  # noqa: BLE001
-                continue
-            if judge(page) == "blocked":
-                _throttled(host, "blocked", None, page.get("markdown") or "")
-                break
-            for l in page["links"]:
-                v = l["url"]
-                if on(v) and not _FILE.search(v) and v not in urls:
-                    urls.append(v); frontier.append(v)
-        how.append(f"link walk: opened {len(opened)} page(s)")
+    if len(urls) < 50 and walk and not _held(host):      # thin or no sitemap: walk the site's own links
+        how.append(f"link walk: opened {_walk_links([url, root + '/'], host, on, rp, walk, urls)} page(s)")
+    if walk and not _held(host) and (len(urls) < 50 or not any(_CATALOG.search(urllib.parse.urlsplit(u).path) for u in urls)):
+        # nothing that looks like a catalogue yet: find its root by the scored parts and walk from there (amd.com's map
+        # was blogs until /en/products was walked: 1,561 product pages, Depot 2026-10-03)
+        lst = listing(url, urls)
+        if lst.get("ok"):
+            before = len(urls)
+            n = _walk_links([lst["url"]], host, on, rp, walk, urls)
+            how.append(f"catalogue root {lst['url']}: opened {n} page(s), {len(urls) - before} new urls")
     rx = re.compile(filter, re.I) if filter else None
     hits = [u for u in urls if not rx or rx.search(u)]
-    top = Counter(_pattern(u) for u in hits).most_common(15)
+    top = Counter(_pattern(u) for u in hits).most_common(25)
+    pats = [{"pattern": pt, "count": n, "samples": [u for u in hits if _pattern(u) == pt][:3],
+             **({"editorial": True} if _EDITORIAL.search(pt) else {})} for pt, n in top]
+    pats = sorted(pats, key=lambda x: (x.get("editorial", False), -x["count"]))[:15]   # editorial sections are never the items
     out = {"ok": bool(hits), "site": root, "count": len(hits), "urls": hits[:int(limit)], "robots": state, "how": "; ".join(how),
-           "patterns": [{"pattern": pt, "count": n, "samples": [u for u in hits if _pattern(u) == pt][:3]} for pt, n in top]}
+           "patterns": pats}
     if not hits:
-        out["error"] = {"code": "NO_URLS" if not urls else "FILTER_MATCHED_NOTHING",
-                        "message": (f"No sitemap and the link walk found no on-site links from {url}." if not urls
-                                    else f"{len(urls)} urls found, none match filter={filter!r}."),
-                        "next_steps": ([f"reach('{url}') to see what the page returns (a JS shell has no links to walk).",
-                                        f"Try the site's listing: listing('{root}')."] if not urls else
-                                       [f"Loosen the filter, or call site_map('{root}') without one and read `patterns`."])}
+        h = _held(host)
+        out["error"] = _held_error(host, h) if h else {
+            "code": "NO_URLS" if not urls else "FILTER_MATCHED_NOTHING",
+            "message": (f"No sitemap, no catalogue root, and the link walk found no on-site links from {url}." if not urls
+                        else f"{len(urls)} urls found, none match filter={filter!r}."),
+            "next_steps": ([f"reach('{url}') to see what the page returns: a refusal or a JS shell has no links to walk.",
+                            f"If you know where the catalogue is, teach Scout: moves(action='propose', kind='listing_root', scope='{host}', spec={{'path': '/your/path'}})"]
+                           if not urls else [f"Loosen the filter, or call site_map('{root}') without one and read `patterns`."])}
     else:
         learn(host, "patterns", [x["pattern"] for x in out["patterns"][:6]])
     return out
@@ -1246,6 +1305,7 @@ def families(url, want="", depth=2, fams=4):
             good = [g for g in got if g["kind"] in ("index", "page")]
             kind, votes = (Counter(g["kind"] for g in good).most_common(1) or [(None, 0)])[0]
             fam = {"family": shape, "links": len(urls), "level": level, "held": f"{len(good)}/{len(got)}", "leads_to": kind,
+                   **({"editorial": True} if _EDITORIAL.search(shape) else {}),
                    "samples": [{k: v for k, v in g.items() if not k.startswith("_")} for g in got],
                    "ok": len(good) >= (2 if level == 0 else 1)}
             fam["yield"] = round(len(urls) * len(good) / len(got)) if fam["ok"] else 0
@@ -1266,7 +1326,7 @@ def families(url, want="", depth=2, fams=4):
 
     ranked = walk(top["url"], top.get("links"), 0)
     res = {"ok": any(f["ok"] for f in ranked), "url": top["url"], "families": ranked}
-    best = next((f for f in ranked if f["ok"]), None)
+    best = next((f for f in ranked if f["ok"] and not f.get("editorial")), None) or next((f for f in ranked if f["ok"]), None)
     if best:
         chain, f = [best["family"]], best
         while f.get("below") and next((b for b in f["below"] if b["ok"]), None):
@@ -1627,6 +1687,32 @@ def demo():
     assert _access_steps("ecfr.example", "CHALLENGE_WALL")[0].startswith("Use the site's official route, eCFR API")
     assert [x["host"] for x in enroll()["enrollments"]] == ["legiscan.example"], "an open route files no enrollment"
     assert [h["host"] for h in recipe()["holds"]] == ["mo.example"] and recipe()["open_enrollments"] == 1
+    assert _EDITORIAL.search("/en/blogs/N/*") and _EDITORIAL.search("/en/newsroom/press-releases/*") and not _EDITORIAL.search("/en/products/*")
+    assert _convert(b"<html><title>=====</title><h1>AMD Ryzen 9 9950X3D</h1><p>x</p></html>", "text/html", "https://a.com/")["title"] == "AMD Ryzen 9 9950X3D"
+    assert _STALL.search("Page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://x") and _STALL.search("The read operation timed out")
+    sm = "Sitemap\nhttps://b.com/p/1 https://b.com/p/2\nhttps://b.com/p/3"
+    assert re.findall(r"https?://[^\s<>\"')\]]+", sm) == ["https://b.com/p/1", "https://b.com/p/2", "https://b.com/p/3"]
+    g = globals()
+    saved = {k: g[k] for k in ("robots", "_sitemap_urls", "_walk_links", "listing")}
+
+    class _RP:
+        def site_maps(self): return ["https://c.example/sitemap.xml"]
+        def can_fetch(self, a, u): return True
+    starts = []
+
+    def _fake_walk(st, host, on, rp, budget, urls):
+        starts.append(st[0])
+        if "products" in st[0]:
+            urls += [f"https://c.example/en/products/p{i}" for i in range(4)]
+        return 1
+    g.update(robots=lambda u: (_RP(), "ok"), _walk_links=_fake_walk, listing=lambda url, urls=None: {"ok": True, "url": "https://c.example/en/products"},
+             _sitemap_urls=lambda sm, seen, cap, depth=0: [f"https://c.example/en/blogs/{i}/post-{i}" for i in range(60)])
+    try:
+        m = site_map("https://c.example")
+    finally:
+        g.update(saved)
+    assert "https://c.example/en/products" in starts and "catalogue root" in m["how"], m["how"]
+    assert m["patterns"][0]["pattern"] == "/en/products/*" and m["patterns"][-1].get("editorial"), m["patterns"]
     print("scout: ok")
 
 
