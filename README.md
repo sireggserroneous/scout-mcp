@@ -35,10 +35,11 @@ Then type `/scout` followed by the url you want to scout:
   "args": ["--from", "git+https://github.com/sireggserroneous/scout-mcp", "scout-mcp"] } } }
 ```
 
-**Pages built by JavaScript.** Scout needs a headless browser to read these:
+**Pages built by JavaScript.** Scout needs a headless browser to read these. Add `"--with", "playwright"` to the
+uvx args (in Claude Code, the plugin's `.mcp.json`), then download Chromium once:
 
 ```
-pip install 'scout-mcp[browser]' && playwright install chromium
+uvx playwright install chromium
 ```
 
 If you already run a self-hosted [Firecrawl](https://github.com/mendableai/firecrawl) or

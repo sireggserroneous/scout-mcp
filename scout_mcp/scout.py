@@ -566,8 +566,8 @@ def diagnose(url, want, tried, best=None):
                "spec={'pattern': '^(https?://.*)$', 'repl': 'https://web.archive.org/web/\\\\1'}, note='public archive copy') "
                f"then reach('{url}') again")
     sitemap = f"site_map('{root}') — pick a real url from the site's own list instead of guessing"
-    install = ("install a rendering reader and retry: pip install 'scout-mcp[browser]' && playwright install chromium "
-               "(or set FIRECRAWL_URL / CRAWL4AI_URL to a self-hosted renderer)")
+    install = ("install a rendering reader and retry: add '--with playwright' to Scout's uvx args and run "
+               "'uvx playwright install chromium' once (or set FIRECRAWL_URL / CRAWL4AI_URL to a self-hosted renderer)")
     T = {
         "robots_disallowed": ("ROBOTS_DISALLOWED", f"{root}/robots.txt disallows this path for Scout's user agent ({UA}). Scout will not fetch it.",
             [f"Look for an official API, data feed or export: {root}/robots.txt often lists Sitemap lines; also try {root}/api or a developers page.",
