@@ -207,6 +207,28 @@ MikroTik added two rules the law sites never needed:
 - **Siblings group under their parent first.** The number shape names the family only when one shape covers 80% of
   them (`Title<n>`). `RB<n>` and `crs<n>_<n>_<n>_in` are both just `/product/*`.
 
+## When a site blocks you
+
+Also from the sibling project. A statute site blocked its crawler's address after a re-read at ten requests a second,
+and the lessons generalise:
+
+- **A block page can come back as HTTP 200.** That site answered `Blocked <your IP> … for assistance EMAIL:
+  WebMaster@…` as an ordinary page, so a check on status codes alone never saw it and the crawler kept going. Scout
+  reads a page as a block only when it has **both halves**, a refusal ("blocked", "access denied", "too many
+  requests") and something about the visitor (an IP address, "your IP", a CAPTCHA, "are you a robot"). That way a page
+  that only mentions "blocked" isn't mistaken for one. It checks error bodies and 200 pages alike.
+- **A block stops the whole walk.** Every reader leaves from the same address, so trying the next one only adds to
+  the load. Scout stops, puts the host **on hold** for 30 minutes, and slows its pace there for good (5 s or slower).
+  A 429 does the same, for its `Retry-After` or 2 minutes.
+- **The probe is built in.** When an automatic hold ends, the next reach is a single probe. If it is refused again,
+  the hold doubles (up to a day) and the pace slows again. You don't need a separate watcher process.
+- **Holds are shared.** They live in Scout's memory, so every agent pointed at the same `SCOUT_DB` stays off the site.
+  A held host is not contacted at all: `reach`, `site_map` and `families` return `HELD` and send no request.
+- **The way out is a person.** The block page usually names a contact, and Scout keeps it with the host. The
+  `BLOCKED` error's first next step says who to email and what to say: what reads the site, that it went too fast,
+  the new pace, and an offer to use a bulk download. `hold(host, reason='unblock requested <date>')` then keeps
+  everyone off until `hold(host, lift=true)`. A hold set that way has no end date, so Scout never probes it.
+
 ## Errors that say what to do next
 
 When Scout fails, it returns an error `code`, a `message`, and `next_steps` written as concrete tool calls, plus the
@@ -218,6 +240,7 @@ When Scout fails, it returns an error `code`, a `message`, and `next_steps` writ
 | `WANT_MISS` | loosening `want`, a `detail_suffix` move, `site_map` |
 | `JS_SHELL` / `THIN_CONTENT` | adding a rendering reader, the site's JSON endpoints, a print view |
 | `REFUSED` / `CHALLENGE_WALL` / `LOGIN_REQUIRED` | the site's API, an archive copy as a `url_rewrite` move, the same document elsewhere |
+| `BLOCKED` / `HELD` | who to email to lift the block, `hold` to keep every agent off until they answer, when Scout probes |
 | `ROBOTS_DISALLOWED` / `RATE_LIMITED` | an official feed, waiting for `Retry-After` |
 | `TLS_ERROR` / `NETWORK` / `SERVER_ERROR` | the cause, retrying later |
 | `NO_URLS` / `NO_LISTING` / `NO_MATCH` / `EXTRACT_MISS` / `TEST_FAILED` | what to recompile or propose |
@@ -232,6 +255,7 @@ When Scout fails, it returns an error `code`, a `message`, and `next_steps` writ
 | `families(url, want?, depth?)` | big model | which link families lead to good pages, by sampling and vote |
 | `compile(name, steps, examples, …)` | big model | tests a recipe and saves it, returns the small-model card |
 | `moves(action, …)` | big model | lists, proposes or retires moves |
+| `hold(host, reason?, lift?, min_interval?)` | big model | keeps every agent off a site (or lets them back), slows Scout's pace there |
 | `memory(host?)` | big model | reader order, routes, moves and recent failures for a host |
 | `recipes(host?)` | both | compiled recipes with scores, status and cards |
 | `run(recipe, input?)` | **small model** | runs a recipe, returns one RESULT line |

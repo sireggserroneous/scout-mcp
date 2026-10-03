@@ -47,6 +47,14 @@ async def families(url: str, want: str = "", depth: int = 2) -> dict:
 
 
 @mcp.tool()
+async def hold(host: str, reason: str = "", lift: bool = False, min_interval: float = 0) -> dict:
+    """Keep every agent sharing Scout's memory off a host, or let them back. Use it when a site blocked you and a person
+    has asked for the block to be lifted: reason says what was asked and when. min_interval (seconds) slows Scout's pace
+    on that host for good. Scout holds a host by itself after a block page or a 429, and probes once when that ends."""
+    return await asyncio.to_thread(S.hold, host, reason, lift, min_interval)
+
+
+@mcp.tool()
 async def moves(action: str = "list", kind: str = "", scope: str = "*", spec: dict | None = None, id: int = 0,
                 note: str = "", host: str = "") -> dict:
     """The moves register: rewrite rules Scout tries where its built-in moves fail, each scored (wins+1)/(tries+2) on

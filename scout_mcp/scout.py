@@ -45,6 +45,13 @@ _CHALLENGE = re.compile(r"just a moment|attention required|captcha|verify you ar
                         r"before you continue|cookie consent", re.I)
 _LOGIN = re.compile(r"\b(sign in|log ?in|api key required|unauthori[sz]ed|subscribe to (?:continue|read))\b", re.I)
 _ERROR_PAGE = re.compile(r"\b(404|page not found|not found|page (?:doesn't|does not) exist|no longer available)\b", re.I)
+# A block page needs BOTH halves: a refusal, and something about the visitor. A state revisor's site served "Blocked <our
+# IP> ... for assistance EMAIL: <its webmaster>" with status 200, so a status-only check never saw it and the crawler kept
+# going at full speed (2026-10-03). Two halves keep a page that merely says "blocked" from tripping it.
+_BLOCK_A = re.compile(r"(?i)\b(?:blocked|access denied|request (?:was )?(?:rejected|blocked)|too many requests|forbidden|unusual traffic)\b")
+_BLOCK_B = re.compile(r"(?i)your (?:public )?ip(?: address)?|\b\d{1,3}(?:\.\d{1,3}){3}\b|captcha|are you a (?:robot|human)|try again later")
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+HOLD_S = 1800                # an automatic hold after a block: probe once when it ends, double it if still blocked
 _JS_NEEDED = re.compile(r"enable javascript|requires javascript|please turn on javascript|you need to enable javascript", re.I)
 _LISTING_WORDS = re.compile(r"(?i)/(products?|catalog(ue)?|shop|collections?|all-products|docs|documentation|blog|articles|library)(/|$|\.)")
 _FILE = re.compile(r"(?i)\.(jpg|jpeg|png|gif|svg|webp|css|js|ico|woff2?|ttf|mp4|mp3|zip)(\?|$)")
@@ -52,9 +59,9 @@ _FILE = re.compile(r"(?i)\.(jpg|jpeg|png|gif|svg|webp|css|js|ico|woff2?|ttf|mp4|
 
 class Status(Exception):
     """The site answered with an HTTP error status."""
-    def __init__(self, status, retry_after=None, challenge=False):
-        super().__init__(f"HTTP {status}" + (" (bot challenge page)" if challenge else ""))
-        self.status, self.retry_after, self.challenge = int(status), retry_after, challenge
+    def __init__(self, status, retry_after=None, challenge=False, blocked=False, body=""):
+        super().__init__(f"HTTP {status}" + (" (block page)" if blocked else " (bot challenge page)" if challenge else ""))
+        self.status, self.retry_after, self.challenge, self.blocked, self.body = int(status), retry_after, challenge, blocked, body
 
 
 # ── memory: one SQLite file, per host routes + the moves register + the failure log ──────────────────────────────────
@@ -138,6 +145,68 @@ def _record(host, engine, ok):
         if m["engine"] == engine:
             m["engine"] = None
     _save(host, m)
+
+
+def hold(host, reason="", lift=False, min_interval=0.0, until=None, contact=None, by="agent"):
+    """Keep everyone who shares this memory off a host. An automatic hold (Scout's, after a block or a 429) has an
+    `until`: the first reach after it is the probe. A hold an agent or a person sets has none: it stays until lifted."""
+    host = _host(host if "://" in host else "https://" + host)
+    m = memory(host)
+    if lift:
+        m["route"].pop("hold", None)
+    else:
+        m["route"]["hold"] = {"reason": reason[:300], "since": time.time(), "until": until, "by": by}
+    if contact:
+        m["route"]["contact"] = contact       # the site's own address for this, kept after the hold is lifted
+    if min_interval:
+        m["route"]["min_interval"] = max(float(m["route"].get("min_interval") or 0), float(min_interval))
+    _save(host, m)
+    return {"ok": True, "host": host, "hold": m["route"].get("hold"), "min_interval": m["route"].get("min_interval")}
+
+
+def _held(host):
+    h = memory(host)["route"].get("hold")
+    if not h or (h.get("until") and time.time() >= h["until"]):
+        return None           # no hold, or an automatic one that has ended: the next reach is the probe
+    return h
+
+
+def _hold_contact(host, text=""):
+    found = _EMAIL.search(text or "")
+    return memory(host)["route"].get("contact") or (found.group(0) if found else None)
+
+
+def _throttled(host, kind, retry_after, text):
+    """A block page or a 429: hold the host (doubling if the probe after a previous hold was refused too), slow its pace
+    for good, and keep the contact the block page names."""
+    prev = memory(host)["route"].get("hold") or {}
+    try:
+        secs = float(retry_after or 0)
+    except ValueError:
+        secs = 0.0
+    secs = max(secs, HOLD_S if kind == "blocked" else 120.0)
+    if prev.get("until"):
+        secs = max(secs, 2 * (prev["until"] - prev["since"]))
+    secs = min(secs, 86400.0)
+    pace = max(5.0 if kind == "blocked" else 2.0, 2 * float(memory(host)["route"].get("min_interval") or MIN_INTERVAL))
+    email = _EMAIL.search(text or "")
+    hold(host, reason=f"{kind}: {' '.join((text or '').split())[:200]}", until=time.time() + secs, min_interval=pace,
+         contact=email.group(0) if email else None, by="scout")
+    return {"until": round(time.time() + secs), "min_interval": pace}
+
+
+def _held_error(host, h):
+    when = (f"Scout probes once after {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(h['until']))}" if h.get("until")
+            else "it stays until someone lifts it")
+    return {"code": "HELD", "message": f"{host} is on hold ({h.get('by')}): {h.get('reason')}. No request was sent; {when}.",
+            "next_steps": ([f"The site asked to be contacted at {_hold_contact(host)}: a person can request the unblock there."] if _hold_contact(host) else []) +
+                          [f"Work on another host meanwhile. hold('{host}', lift=true) once the site has answered.",
+                           f"memory('{host}') shows the hold and the pace Scout will use there."]}
+
+
+def _blocked(text):
+    t = (text or "")[:4000]
+    return bool(_BLOCK_A.search(t) and _BLOCK_B.search(t))
 
 
 def _order(names, winner, dead, render_first=False):
@@ -287,7 +356,7 @@ def _polite(url):
     if not rp.can_fetch(UA, url):
         return False, state
     host = urllib.parse.urlsplit(url).netloc
-    gap = max(MIN_INTERVAL, min(float(rp.crawl_delay(UA) or 0), 30.0))
+    gap = max(MIN_INTERVAL, min(float(rp.crawl_delay(UA) or 0), 30.0), float(memory(_host(url))["route"].get("min_interval") or 0))
     with _lock:
         wait = _LAST.get(host, 0) + gap - time.time()
         _LAST[host] = time.time() + max(wait, 0)
@@ -335,7 +404,8 @@ def _direct(url, timeout):
             body = e.read(20_000).decode("utf-8", "replace")
         except Exception:  # noqa: BLE001
             body = ""
-        raise Status(e.code, e.headers.get("Retry-After") if e.headers else None, bool(_CHALLENGE.search(body))) from None
+        raise Status(e.code, e.headers.get("Retry-After") if e.headers else None, bool(_CHALLENGE.search(body)),
+                     _blocked(body), " ".join(re.sub(r"<[^>]+>", " ", body).split())[:600]) from None
     if raw[:2] == b"\x1f\x8b":
         raw = gzip.decompress(raw)
     return {**_convert(raw, ctype, final), "final_url": final}
@@ -412,12 +482,14 @@ def _carries(md, want):
 
 
 def judge(page, want=""):
-    """ok | want_miss (real content, not what was asked) | js_shell | challenge | login_wall | error_page | thin | empty"""
+    """ok | want_miss (real content, not what was asked) | js_shell | blocked | challenge | login_wall | error_page | thin | empty"""
     md, title = page.get("markdown") or "", page.get("title") or ""
     if page.get("shell"):
         return "js_shell"
     if not md.strip():
         return "empty"
+    if len(md) < 8000 and _blocked(title + " " + md):
+        return "blocked"
     if _CHALLENGE.search(title + " " + md[:1500]) and len(md) < 5000:
         return "challenge"
     if _ERROR_PAGE.search(title) or (len(md) < 8000 and _ERROR_PAGE.search(md[:300])):
@@ -434,6 +506,8 @@ def judge(page, want=""):
 def _outcome(exc):
     if isinstance(exc, Status):
         s = exc.status
+        if getattr(exc, "blocked", False):
+            return "blocked"
         if getattr(exc, "challenge", False) and s in (403, 503):
             return "challenge"
         return {429: "rate_limited", 404: "not_found", 410: "not_found"}.get(s) or (
@@ -482,14 +556,21 @@ def _try_readers(url, want, tried):
         except Exception as e:  # noqa: BLE001
             out = _outcome(e)
             tried.append({"url": url, "reader": name, "outcome": out, "status": getattr(e, "status", None),
-                          "retry_after": getattr(e, "retry_after", None), "detail": str(e)[:160]})
-            if out not in ("rate_limited", "not_found", "http_error"):
-                _record(host, name, False)     # a 404 or a 429 is the page or the host, not this reader's fault
-            if out in ("rate_limited", "not_found"):
-                break                 # another reader will not fix a 404, and a 429 means stop knocking
+                          "retry_after": getattr(e, "retry_after", None), "detail": (getattr(e, "body", "") or str(e))[:200]})
+            if out in ("blocked", "rate_limited"):
+                tried[-1]["hold"] = _throttled(host, out, getattr(e, "retry_after", None), getattr(e, "body", "") or "")
+                break                 # every reader leaves from the same address: stop knocking
+            if out not in ("not_found", "http_error"):
+                _record(host, name, False)     # a 404 is the page, not this reader's fault
+            if out == "not_found":
+                break                 # another reader will not fix a 404
             continue
         verdict = judge(page, want)
         tried.append({"url": url, "reader": name, "outcome": verdict, "chars": len(page.get("markdown") or "")})
+        if verdict == "blocked":
+            tried[-1]["detail"] = " ".join((page.get("markdown") or "").split())[:200]
+            tried[-1]["hold"] = _throttled(host, "blocked", None, page.get("markdown") or "")
+            break
         real = verdict in ("ok", "want_miss")
         _record(host, name, real)     # did this reader get a real page; whether it held the want is a separate question
         if verdict == "js_shell" and name == "direct":
@@ -519,9 +600,12 @@ def reach(url, want="", full=False, _depth=0, _links=False):
     if "://" not in url:
         url = "https://" + url
     host, tried = _host(url), []
+    h = _held(host)
+    if h:
+        return {"ok": False, "url": url, "error": _held_error(host, h), "tried": []}
     page, reader = _try_readers(url, want, tried)
     via = None
-    if not page and _depth == 0 and not any(t["outcome"] in ("robots_disallowed", "rate_limited") for t in tried):
+    if not page and _depth == 0 and not any(t["outcome"] in ("robots_disallowed", "rate_limited", "blocked") for t in tried):
         best = reader if isinstance(reader, dict) else None
         hops = []                     # (url, move id or None, what it is) — the next rungs, best first
         for mv in moves("url_rewrite", host)[:2]:
@@ -547,10 +631,12 @@ def reach(url, want="", full=False, _depth=0, _links=False):
                 if what.startswith("detail_suffix"):
                     learn(host, "detail_suffix", new[len(url.rstrip("/")):])
                 break
-            if any(t["outcome"] == "rate_limited" for t in sub):
+            if any(t["outcome"] in ("rate_limited", "blocked") for t in sub):
                 break
     if page:
         md = page.get("markdown") or ""
+        if (memory(host)["route"].get("hold") or {}).get("until"):
+            hold(host, lift=True)     # the probe after an automatic hold got through; the slower pace stays
         return {"ok": True, "url": page.get("final_url") or url, "requested_url": url, "via": via,
                 "reader": [t for t in tried if t["outcome"] == "ok"][-1]["reader"], "title": page.get("title", ""),
                 "chars": len(md), "prose": prose(md), "markdown": excerpt(md, want, full), "tried": tried, "learned": memory(host),
@@ -566,7 +652,7 @@ def reach(url, want="", full=False, _depth=0, _links=False):
 
 
 # ── actionable errors: what failed, why, and the next call that could fix it ─────────────────────────────────────────
-_PRIORITY = ["robots_disallowed", "rate_limited", "challenge", "refused", "login_wall", "not_found", "error_page",
+_PRIORITY = ["robots_disallowed", "blocked", "rate_limited", "challenge", "refused", "login_wall", "not_found", "error_page",
              "js_shell", "thin", "empty", "want_miss", "tls", "network", "server_error", "reader_missing", "http_error"]
 
 
@@ -578,6 +664,7 @@ def diagnose(url, want, tried, best=None):
     first = next((o for o in _PRIORITY if o in seen), "unknown")
     status = next((t.get("status") for t in tried if t.get("status")), None)
     renderers = [r for r in readers() if r in RENDERERS]
+    blocktext = " ".join(t.get("detail") or "" for t in tried if t["outcome"] == "blocked")
     archive = (f"moves(action='propose', kind='url_rewrite', scope='{host}', "
                "spec={'pattern': '^(https?://.*)$', 'repl': 'https://web.archive.org/web/\\\\1'}, note='public archive copy') "
                f"then reach('{url}') again")
@@ -589,6 +676,19 @@ def diagnose(url, want, tried, best=None):
             [f"Look for an official API, data feed or export: {root}/robots.txt often lists Sitemap lines; also try {root}/api or a developers page.",
              sitemap + " (only robots-allowed pages are listed)",
              "Ask the site owner to allow your user agent."]),
+        "blocked": ("BLOCKED", f"{host} served a block page{f' (HTTP {status})' if status else ''}: "
+                    f"\"{next((t.get('detail') or '' for t in tried if t['outcome'] == 'blocked'), '')[:160]}\". "
+                    f"Scout put the host on hold and will send one probe when the hold ends; its pace there is now one request every "
+                    f"{memory(host)['route'].get('min_interval', MIN_INTERVAL):g} s or slower.",
+            ([f"Have a person email {_hold_contact(host, blocktext)} to lift the block: say what reads the site, that it went too fast, "
+              f"the new pace (one request every {max(2, memory(host)['route'].get('min_interval', 2)):g} s), and offer to use a bulk "
+              "download if they publish one. Then hold(...) as below until they answer."] if _hold_contact(host, blocktext) else
+             [f"Find the site's contact (the block page, {root}/contact, the footer) and ask a person to request the unblock."]) +
+            [f"hold('{host}', reason='blocked; unblock requested <date>') keeps every agent sharing this memory off the site "
+             f"until hold('{host}', lift=true).",
+             "Do not switch readers or addresses to get past it: the block is on the address, and getting around a throttle is "
+             "what turns it into a ban.",
+             f"memory('{host}') shows the hold and when the probe is due."]),
         "rate_limited": ("RATE_LIMITED", f"{host} answered 429 Too Many Requests" +
                          (f" with Retry-After {next((t.get('retry_after') for t in tried if t.get('retry_after')), '')}" if any(t.get('retry_after') for t in tried) else "") + ".",
             ["Wait (Retry-After seconds, or a few minutes) and call reach once more.",
@@ -648,12 +748,18 @@ def _pattern(u):
 
 
 def _get(url, timeout=20):
+    if _held(_host(url)):
+        return None
     allowed, _ = _polite(url)
     if not allowed:
         return None
     with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=timeout) as r:
         raw = r.read(MAX_BYTES)
-    return gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+    raw = gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+    if len(raw) < 20000 and _blocked(raw.decode("utf-8", "replace")):
+        _throttled(_host(url), "blocked", None, raw.decode("utf-8", "replace"))
+        return None
+    return raw
 
 
 def _sitemap_urls(sm, seen, cap, depth=0):
@@ -681,6 +787,10 @@ def site_map(url, filter="", limit=500, walk=20):
         url = "https://" + url
     p = urllib.parse.urlsplit(url)
     root, host = f"{p.scheme}://{p.netloc}", p.netloc.lower()
+    h = _held(host)
+    if h:
+        return {"ok": False, "site": root, "count": 0, "urls": [], "patterns": [], "robots": None, "how": "on hold",
+                "error": _held_error(host, h)}
     rp, state = robots(url)
     declared = rp.site_maps() or [root + "/sitemap.xml", root + "/sitemap_index.xml"]
     seen, urls = set(), []
@@ -696,10 +806,20 @@ def site_map(url, filter="", limit=500, walk=20):
             if u in opened or not rp.can_fetch(UA, u):
                 continue
             opened.add(u)
+            if _held(host):
+                break
             try:
                 page = _direct(u, 20)
+            except Status as e:
+                if _outcome(e) in ("blocked", "rate_limited"):
+                    _throttled(host, _outcome(e), e.retry_after, e.body)
+                    break
+                continue
             except Exception:  # noqa: BLE001
                 continue
+            if judge(page) == "blocked":
+                _throttled(host, "blocked", None, page.get("markdown") or "")
+                break
             for l in page["links"]:
                 v = l["url"]
                 if on(v) and not _FILE.search(v) and v not in urls:
@@ -1231,6 +1351,21 @@ def demo():
     assert prose("The courts enumerated in section 1-101 are courts of record and shall keep a seal.") > 0.6
     assert prose("Home Products Support Contact Search Login Cart Menu Store Locator Careers News") < 0.3
     assert _check_steps([{"reach": "https://x.gov/"}, {"links": "/ch/<n>/"}]) == ""
+    mo = "Blocked 203.0.113.7 for assistance EMAIL: webmaster@example.gov"
+    assert _blocked(mo) and judge({"markdown": mo}) == "blocked" and _outcome(Status(200, blocked=True)) == "blocked"
+    assert not _blocked("1.210. A person blocked from office by law shall not be imprisoned unless by authority of law.")
+    assert not _blocked("Your IP address is shown in the footer")
+    t = _throttled("mo.example", "blocked", None, mo)
+    assert _held("mo.example") and _hold_contact("mo.example") == "webmaster@example.gov" and t["min_interval"] >= 5
+    assert reach("https://mo.example/x")["error"]["code"] == "HELD", "a held host is not fetched"
+    m = memory("mo.example"); h = m["route"]["hold"]; h["since"] -= HOLD_S + 1; h["until"] -= HOLD_S + 1; _save("mo.example", m)
+    assert not _held("mo.example"), "an ended automatic hold lets one probe through"
+    t2 = _throttled("mo.example", "blocked", None, mo)
+    assert t2["until"] - time.time() > HOLD_S * 1.5 and t2["min_interval"] >= 2 * t["min_interval"], "still blocked: hold doubles"
+    hold("mo.example", lift=True); hold("mo.example", reason="unblock requested by email")
+    m = memory("mo.example"); assert _held("mo.example") and not m["route"]["hold"]["until"], "a hand-set hold has no end"
+    e = diagnose("https://mo.example/x", "", [{"outcome": "blocked", "status": 200, "detail": mo}])
+    assert e["code"] == "BLOCKED" and "webmaster@example.gov" in e["next_steps"][0], e
     print("scout: ok")
 
 
