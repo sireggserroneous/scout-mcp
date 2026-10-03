@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "scout-mcp",
+  "description": "Scout MCP: an honest web scout that learns how to reach good information on any site.",
+  "owner": {
+    "name": "Pedro Paulino (Sir Eggs Erroneous)",
+    "url": "https://github.com/sireggserroneous"
+  },
+  "plugins": [
+    {
+      "name": "scout",
+      "description": "/scout <url>: reach the page, map the site, find its listing, learn the route. Honest user agent, robots.txt obeyed, actionable errors.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

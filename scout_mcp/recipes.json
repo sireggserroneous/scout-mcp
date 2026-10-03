@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "note": "Seed moves. Each is a candidate: it starts at score 0.5 and earns or loses its place on your own traffic. hosts{} holds per-host recipes (render, listing, detail_suffix, patterns) and starts empty.",
+ "moves": [
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/products"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/en/products"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/en-us/products"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/product"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/catalog"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/shop"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/collections/all"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/all-products"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/products.html"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/docs"}},
+  {"kind": "listing_path", "scope": "*", "spec": {"path": "/blog"}},
+  {"kind": "detail_suffix", "scope": "*", "spec": {"suffix": "/specifications"}},
+  {"kind": "detail_suffix", "scope": "*", "spec": {"suffix": "/specs"}},
+  {"kind": "detail_suffix", "scope": "*", "spec": {"suffix": "/spec"}},
+  {"kind": "detail_suffix", "scope": "*", "spec": {"suffix": "/tech-specs"}},
+  {"kind": "detail_suffix", "scope": "*", "spec": {"suffix": "/downloads"}}
+ ],
+ "hosts": {}
+}

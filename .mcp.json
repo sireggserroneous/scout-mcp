@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "scout": {
+      "command": "uvx",
+      "args": ["--from", "${CLAUDE_PLUGIN_ROOT}", "scout-mcp"]
+    }
+  }
+}

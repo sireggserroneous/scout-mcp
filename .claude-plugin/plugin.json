@@ -1,0 +1,13 @@
+{
+  "name": "scout",
+  "version": "0.1.0",
+  "description": "Scout MCP: an honest, evolving web scout. Learns per host which path through the maze ends at good information; failed scouts return coded errors with next steps any capable AI can act on.",
+  "author": {
+    "name": "Pedro Paulino (Sir Eggs Erroneous)",
+    "url": "https://github.com/sireggserroneous"
+  },
+  "homepage": "https://github.com/sireggserroneous/scout-mcp",
+  "repository": "https://github.com/sireggserroneous/scout-mcp",
+  "license": "MIT",
+  "keywords": ["mcp", "crawler", "scraping", "robots-txt", "markov", "honest-bot", "sitemap"]
+}
