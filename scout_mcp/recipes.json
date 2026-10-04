@@ -1230,7 +1230,8 @@
    "examples": [
     "Ryzen 9 9900X3D",
     "Ryzen 9 9950X3D",
-    "EPYC 9575F"
+    "EPYC 9575F",
+    "EPYC 9965"
    ],
    "steps": [
     {
@@ -1261,8 +1262,8 @@
       "threads": "^\\s*\\\\?# of Threads\\s*\\n\\s*:\\s*(\\S.*)$",
       "boost": "^\\s*Max\\. Boost Clock\\s*\\n\\s*:\\s*(\\S.*)$",
       "tdp": "^\\s*Default TDP\\s*\\n\\s*:\\s*(\\S.*)$",
-      "socket": "^\\s*CPU Socket\\s*\\n\\s*:\\s*(\\S.*)$",
-      "launched": "^\\s*Launch Date\\s*\\n\\s*:\\s*(\\S.*)$"
+      "launched": "^\\s*Launch Date\\s*\\n\\s*:\\s*(\\S.*)$",
+      "socket?": "^\\s*CPU Socket\\s*\\n\\s*:\\s*(\\S.*)$"
      }
     }
    ]

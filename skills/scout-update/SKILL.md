@@ -34,7 +34,12 @@ Call `memory` with no host and look for hosts with a `hold`.
 - A hold someone set by hand is waiting on a site's answer. Ask the user whether the site replied. Lift it with
   `hold(host, lift=true)` only when they say it has. Keep the pace the site asked for, using `min_interval`.
 
-## 4. Failures
+## 4. Cached sites
+
+For each site the user pulls a lot from, call `cache` with `action='status'`. A job in state `done` is ready for
+`cached=true` runs. A stopped or failed job: report it, and restart it only if the user asks.
+
+## 5. Failures
 
 Read `recent_failures` from the same `memory` call. For walls with no official route, look for the site's API,
 developer program or bulk download and record it with `enroll` `action='request'`. For other failures, propose a move

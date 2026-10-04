@@ -13,6 +13,13 @@ Turn that into a `want` regex: a model number, `price|\$`, `weight|kg`. If there
 
 Call `scout` with `url` and `want`.
 
+- If `recipes` already has one for what the user wants and its status is ok, use it with `run` and stop here.
+- If you found the site by searching, check `own_hosts`. A host that carries the subject's name but that its site
+  doesn't link to is a reseller, not the maker.
+- If the user will pull a lot from this site (many pages, a long list of models), use cached mode. Call
+  `cache(url, filter=…)`, with `source='archive'` when the site walls Scout or should not be loaded. Then run recipes
+  with `inputs=[…]` and `cached=true`.
+
 If `ok` is false, read `page.error.code` and `page.error.next_steps`. Each step is a concrete call. Try them in
 order, for at most three rounds:
 - A `site_map(...)` step: run it, pick the real url that best fits the request, then `reach` that url.

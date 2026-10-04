@@ -23,13 +23,13 @@ async def scout(url: str, want: str = "", full: bool = False) -> dict:
 
 
 @mcp.tool()
-async def reach(url: str, want: str = "", full: bool = False, fresh: bool = False) -> dict:
+async def reach(url: str, want: str = "", full: bool = False, fresh: bool = False, cached: bool = False) -> dict:
     """Reach one page and judge whether it is good information. Tries the host's learned readers winner-first, then
     scored url rewrites and detail sub-pages. Returns ok, markdown (excerpt unless full=true), the trail `tried`, and on
     failure an `error` {code, message, next_steps}. A page read today comes from Scout's mirror (fresh=true reads it
     again). When the site walls Scout, or is on hold, the latest Wayback Machine copy is read instead, and `archived`
-    says when it was captured."""
-    return await asyncio.to_thread(S.reach, url, want, full, 0, False, fresh)
+    says when it was captured. cached=true reads only Scout's copy of the site (see cache) and sends no request."""
+    return await asyncio.to_thread(S.reach, url, want, full, 0, False, fresh, cached)
 
 
 @mcp.tool()
@@ -107,16 +107,28 @@ async def compile(name: str, steps: list, examples: list | None = None, about: s
       {"reach": "https://site/p/{input}" | "{url}", "want": regex}   read a page
       {"find": regex}   first link on the page matching (url or text) becomes {url}
       {"links": "/chapter/<n>/"}   a link family from families(); last step = all its links, else the first is {url}
-      {"extract": {"field": "regex with one group"}}   every field must be found
+      {"extract": {"field": "regex with one group", "optional?": "..."}}   every field must be found, except a name ending in ?
     Prefer map over a guessed url template: sites are inconsistent about case and slugs."""
     return await asyncio.to_thread(S.compile_recipe, name, steps, examples, about, input_name)
 
 
 @mcp.tool()
-async def run(recipe: str, input: str = "") -> dict:
-    """Run a compiled recipe. Reply with the RESULT line."""
-    r = await asyncio.to_thread(S.run, recipe, input)
+async def run(recipe: str, input: str = "", inputs: list | None = None, cached: bool = False) -> dict:
+    """Run a compiled recipe. Reply with the RESULT line. `inputs` runs it over many inputs (one RESULT line each);
+    cached=true reads only Scout's copy of the site, sending no request (use after cache)."""
+    if inputs:
+        return await asyncio.to_thread(S.run_many, recipe, inputs, cached)
+    r = await asyncio.to_thread(S.run, recipe, input, None, cached)
     return {k: r[k] for k in ("result", "fix") if k in r}
+
+
+@mcp.tool()
+async def cache(url: str, filter: str = "", source: str = "auto", max_pages: int = 2000, days: float = 7, action: str = "start") -> dict:
+    """Cached mode, for pulling a lot from one site: list it once (filter narrows the urls) and download every page once
+    into Scout's copy, in the background, at the host's pace. source='archive' downloads from the Wayback Machine with no
+    request to the site; 'live' from the site; 'auto' live, with the archive where the site walls Scout. The copy is kept
+    `days`; reads and recipe runs with cached=true use only it. action=status follows the job; action=stop ends it."""
+    return await asyncio.to_thread(S.cache, url, filter, source, max_pages, days, action)
 
 
 @mcp.tool()
@@ -132,10 +144,22 @@ def main():
     import json
     import sys
     args = sys.argv[1:]
+    cached = "--cached" in args
+    args = [a for a in args if a != "--cached"]
     if args[:1] == ["run"] and len(args) >= 2:
-        r = S.run(args[1], " ".join(args[2:]))
+        if args[2:] == ["-"]:                       # one input per line on stdin, one RESULT line each
+            r = S.run_many(args[1], [l.strip() for l in sys.stdin if l.strip()], cached)
+            print("\n".join(r["results"]))
+            sys.exit(0 if not r["failed"] else 1)
+        r = S.run(args[1], " ".join(args[2:]), cached=cached)
         print(r["result"])
         sys.exit(0 if r["ok"] else 1)
+    if args[:1] == ["cache"] and len(args) >= 2:   # scout-mcp cache <url> [filter] [--archive]: downloads in the foreground
+        src = "archive" if "--archive" in args else "auto"
+        rest = [a for a in args[2:] if a != "--archive"]
+        r = S.cache(args[1], rest[0] if rest else "", src, wait=True)
+        print(json.dumps({k: r.get(k) for k in ("ok", "host", "listed", "already_cached", "to_fetch", "source", "error")}))
+        sys.exit(0 if r.get("ok") else 1)
     if args[:1] == ["recipes"]:
         for r in S.recipes(args[1] if len(args) > 1 else ""):
             print(json.dumps({k: r[k] for k in ("name", "about", "status", "bash")}))

@@ -112,7 +112,7 @@ RESULT: fail | mikrotik.com/specs | nope 9 | NO_MATCH at step 1
 | `{"reach": "https://…/{input}" \| "{url}", "want": regex}` | reads a page with the full reader ladder (below) |
 | `{"find": regex}` | the first link on the page whose url or text matches becomes `{url}` |
 | `{"links": "/chapter/<n>/"}` | a link family from `families`. Last step: every matching link on the page. Otherwise: the first becomes `{url}`. |
-| `{"extract": {"field": regex}}` | group 1 of each regex. Every field must be found. |
+| `{"extract": {"field": regex, "optional?": regex}}` | group 1 of each regex. Every field must be found, except one whose name ends in `?`, which is filled only when the page has it. |
 
 ## How Scout learns: a maze, a Markov chain, and rewrite rules
 
@@ -319,7 +319,9 @@ request.
   recipe RESULT lines carry `archived=<date>`. The url stays the site's own, so provenance is honest.
 - **The archive is never a host's winning reader.** Live reading resumes as soon as the site allows it, and robots.txt
   still binds: a path the site disallows is not read from its archive either. The archive itself is paced at one
-  request every 2 seconds.
+  request every 4.5 seconds, under its limit of about 15 copies a minute. Scout's first try at 2 seconds got it refused
+  by archive.org, so a refusal from the archive now holds the archive too (10 minutes, doubling), and cache jobs wait
+  out the hold, never knocking through it.
 - **A local mirror.** Every good page is kept on disk for a day (`SCOUT_MIRROR_DAYS`). Re-runs, parser fixes and recipe
   compiles read the copy, not the site; `reach(fresh=true)` reads it again. Scout's pace was already a promise: it only
   ever slows down for a host, never speeds back up.
@@ -329,6 +331,41 @@ It compiles like any other recipe. `amd.com/processor-specs` ships in the book, 
 ```
 RESULT: ok | amd.com/processor-specs | EPYC 9575F | url=https://www.amd.com/en/products/processors/server/epyc/9005-series/amd-epyc-9575f.html; title=AMD EPYC™ 9575F; archived=2026-07-10; cores=64; threads=128; boost=Up to 5 GHz; tdp=400W; socket=SP5; launched=10/10/2024
 ```
+
+## Cached mode: when you'll pull a lot from one site
+
+Asking a site for the same pages again and again is how crawlers get blocked. If you're about to pull a lot from one
+site, download it once and work from the copy:
+
+```
+cache("https://www.amd.com/en/products/processors/", filter="(9000|9005)-series/.+\\.html$", source="archive")
+cache(url, action="status")                       # listed, fetched, failed, eta
+run("amd.com/processor-specs", inputs=["Ryzen 9 9950X3D", "EPYC 9575F", ...], cached=true)
+```
+
+- **`cache`** lists the site (sitemaps, link walk, catalogue root, or the Wayback index), then fetches every page once
+  into Scout's copy, in the background, at the host's pace. `source='archive'` downloads from the Wayback Machine with
+  no request to the site at all. `'auto'` reads live, with the archive where the site walls Scout. The copy is kept
+  `days` (default 7).
+- **`cached=true`** on `reach`, `site_map` and `run` reads only the copy and sends nothing anywhere. A page that isn't in
+  it fails with `NOT_CACHED` and says how to get it. A recipe over a cached site runs at memory speed, so a small model
+  can work through a long input list without the site ever seeing it.
+- **`run(recipe, inputs=[…])`** returns one RESULT line per input. On the command line:
+  `scout-mcp cache <url> [filter] [--archive]` downloads in the foreground, and
+  `scout-mcp run <recipe> - --cached < models.txt` prints one line per input.
+
+## What a scout checks first
+
+These rules come from the sibling crawler's queue:
+
+- **What already exists.** `scout(url)` returns the site's compiled `recipes` first. A recipe that passes is the
+  answer, so nobody re-scouts the site.
+- **Whose site it is.** `own_hosts` lists the hosts the site links to that carry its name, such as regional sites or a
+  store. A host that carries the name but isn't linked is a reseller lead, not the maker: meanwellsource.com had 1,827
+  "Mean Well" pages.
+- **The sibling the request names.** When a page lacks what was asked, one of Scout's next steps climbs to the page
+  that lists it and its siblings, and follows the sibling link that names two-thirds of the request's words. Depot held
+  New York's Criminal Procedure Law and was asked for its Estates, Powers and Trusts Law; the CPL's parent page named it.
 
 ## Errors that say what to do next
 
@@ -360,7 +397,8 @@ When Scout fails, it returns an error `code`, a `message`, and `next_steps` writ
 | `enroll(action, host?, info?, note?)` | big model | records a site's official route, and lists, tests and closes enrollment requests |
 | `memory(host?)` | big model | reader order, routes, moves and recent failures for a host |
 | `recipes(host?)` | both | compiled recipes with scores, status and cards |
-| `run(recipe, input?)` | **small model** | runs a recipe, returns one RESULT line |
+| `run(recipe, input?, inputs?, cached?)` | **small model** | runs a recipe, returns one RESULT line (one per input) |
+| `cache(url, filter?, source?, days?, action?)` | big model | downloads a site once (live or from the Wayback Machine) for cached reads |
 
 Give the small model only `run`, or the CLI. One tool means it has nothing to choose between.
 

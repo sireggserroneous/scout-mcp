@@ -33,7 +33,8 @@ ENGINE_ORDER = ["direct", "firecrawl", "crawl4ai", "browser"]       # cheapest f
 # 2026-10-03: 1,543 of AMD's product pages, newest a day old, while amd.com blocked us). It never becomes a host's
 # winning reader, so live reading resumes when the site allows it; robots.txt still binds what Scout reads from it.
 ARCHIVE = os.environ.get("SCOUT_ARCHIVE", "https://web.archive.org").rstrip("/")
-ARCHIVE_PACE = 2.0           # seconds between requests to the archive: it is a library, not a CDN
+ARCHIVE_PACE = 4.5           # the Wayback Machine allows ~15 copies a minute; 2 s got Scout refused (2026-10-04)
+ARCHIVE_HOLD = 600           # the archive refused us: leave it alone this long (doubling while it keeps refusing)
 ARCHIVE_WHEN = {"blocked", "rate_limited", "silent_refusal", "challenge", "refused", "login_wall", "network", "server_error"}
 MIRROR_DAYS = float(os.environ.get("SCOUT_MIRROR_DAYS", "1"))   # a good page is re-read from disk this long: download once
 RENDERERS = {"firecrawl", "crawl4ai", "browser"}
@@ -215,11 +216,11 @@ def _throttled(host, kind, retry_after, text):
         secs = float(retry_after or 0)
     except ValueError:
         secs = 0.0
-    secs = max(secs, HOLD_S if kind in ("blocked", "silent_refusal") else 120.0)
+    secs = max(secs, HOLD_S if kind in ("blocked", "silent_refusal") else ARCHIVE_HOLD if kind == "archive" else 120.0)
     if prev.get("until"):
         secs = max(secs, 2 * (prev["until"] - prev["since"]))
     secs = min(secs, 86400.0)
-    pace = max(5.0 if kind in ("blocked", "silent_refusal") else 2.0, 2 * float(memory(host)["route"].get("min_interval") or MIN_INTERVAL))
+    pace = max(5.0 if kind in ("blocked", "silent_refusal", "archive") else 2.0, 2 * float(memory(host)["route"].get("min_interval") or MIN_INTERVAL))
     email = _EMAIL.search(text or "")
     hold(host, reason=f"{kind}: {' '.join((text or '').split())[:200]}", until=time.time() + secs, min_interval=pace,
          contact=email.group(0) if email else None, by="scout")
@@ -564,13 +565,19 @@ def _mirror_path(url):
     return DB_PATH.parent / "mirror" / _host(url) / (hashlib.sha256(url.encode()).hexdigest()[:24] + ".json")
 
 
+def _mirror_days(url):
+    return max(MIRROR_DAYS, float(memory(_host(url))["route"].get("mirror_days") or 0))
+
+
 def _mirror_get(url):
-    """A good page read in the last MIRROR_DAYS: re-runs and recipe compiles read the copy, not the site."""
-    if MIRROR_DAYS <= 0:
+    """A good page read in the last MIRROR_DAYS (or the days a cache() of its site asked for): re-runs and recipe
+    compiles read the copy, not the site."""
+    days = _mirror_days(url)
+    if days <= 0:
         return None
     path = _mirror_path(url)
     try:
-        if time.time() - path.stat().st_mtime < MIRROR_DAYS * 86400:
+        if time.time() - path.stat().st_mtime < days * 86400:
             return json.loads(path.read_text())
     except (OSError, ValueError):
         pass
@@ -578,7 +585,7 @@ def _mirror_get(url):
 
 
 def _mirror_put(url, page, reader):
-    if MIRROR_DAYS <= 0:
+    if _mirror_days(url) <= 0:
         return
     try:
         path = _mirror_path(url)
@@ -687,10 +694,19 @@ def _try_readers(url, want, tried, fresh=False, archive_only=False):
         if not rp.can_fetch(UA, url):
             tried.append({"url": url, "reader": "archive", "outcome": "robots_disallowed"})
             return None, best
+        ah = _held(_host(ARCHIVE))
+        if ah:
+            tried.append({"url": url, "reader": "archive", "outcome": "archive_held", "detail": ah.get("reason", "")[:120],
+                          "until": ah.get("until")})
+            return None, best
         try:
             page = _archive(url, TIMEOUT["archive"])
         except Exception as e:  # noqa: BLE001
-            tried.append({"url": url, "reader": "archive", "outcome": "no_archive", "detail": str(e)[:120]})
+            refused = getattr(e, "status", 0) in (403, 429, 503) or re.search(r"refused|reset|aborted", str(e), re.I)
+            tried.append({"url": url, "reader": "archive", "outcome": "archive_throttled" if refused else "no_archive",
+                          "detail": str(e)[:120]})
+            if refused:          # the library asked us to slow down: every reader of it stops, for everyone sharing memory
+                _throttled(_host(ARCHIVE), "archive", None, f"the Wayback Machine refused a copy ({str(e)[:80]})")
             return None, best
         verdict = judge(page, want)
         tried.append({"url": url, "reader": "archive", "outcome": verdict, "chars": len(page.get("markdown") or ""),
@@ -764,13 +780,45 @@ def _want_links(page, want, limit=3):
     return out[:limit]
 
 
-def reach(url, want="", full=False, _depth=0, _links=False, fresh=False):
+def _siblings(url, want, limit=2):
+    """The page lacks what was asked: climb to the page listing it and its siblings, and take the sibling links whose
+    own line names two thirds of the request's words (estate scout, 2026-10-04: Depot held New York's Criminal Procedure
+    Law, the prompt asked for its Estates, Powers and Trusts Law, and the CPL's parent listing named the EPTL)."""
+    words = {w for w in re.findall(r"[a-z0-9]{3,}", re.sub(r"\\[a-z]", " ", want.lower()))}
+    if not words:
+        return []
+    need, p = max(1, -(-2 * len(words) // 3)), urllib.parse.urlsplit(url)
+    own, up, out = p.path.rstrip("/"), p.path.rstrip("/"), []
+    for _ in range(2):
+        up = up.rsplit("/", 1)[0]
+        if not up:
+            break
+        r = reach(f"{p.scheme}://{p.netloc}{up}/", _depth=1, _links=True)
+        for l in r.get("links") or []:
+            lp = urllib.parse.urlsplit(l["url"]).path.rstrip("/")
+            hits = len(words & set(re.findall(r"[a-z0-9]{3,}", (l.get("text", "") + " " + lp).lower())))
+            if _host(l["url"]) == p.netloc.lower() and lp.startswith(up + "/") and lp != own and not own.startswith(lp) and hits >= need:
+                out.append((hits, l["url"]))
+        if out:
+            break
+    return [u for _, u in sorted(out, key=lambda x: -x[0])][:limit]
+
+
+def reach(url, want="", full=False, _depth=0, _links=False, fresh=False, cached=False, _archive_only=False):
     """Reach good information at `url`. `want` is a regex the page must carry (a model number, 'price|\\$', a heading)."""
     if "://" not in url:
         url = "https://" + url
     host, tried = _host(url), []
-    h = _held(host)
-    if h:      # the site is not to be asked: its archive may still answer, without a single request to the site
+    if cached and not _mirror_get(url):
+        root = f"https://{host}"
+        return {"ok": False, "url": url, "tried": [], "error": {"code": "NOT_CACHED",
+                "message": f"{url} is not in Scout's copy of {host}, and cached mode sends no request.",
+                "next_steps": [f"cache('{root}') downloads the site once (source='archive' for zero load on the site), then read it cached",
+                               "or read this page live: call again without cached"]}}
+    h = None if cached else _held(host)
+    if _archive_only and not cached:
+        page, reader = _try_readers(url, want, tried, fresh, archive_only=True)
+    elif h:      # the site is not to be asked: its archive may still answer, without a single request to the site
         page, reader = _try_readers(url, want, tried, fresh, archive_only=True) if "archive" in readers() else (None, None)
         if not page:
             err = _held_error(host, h)
@@ -780,7 +828,7 @@ def reach(url, want="", full=False, _depth=0, _links=False, fresh=False):
     else:
         page, reader = _try_readers(url, want, tried, fresh)
     via = None
-    if not page and _depth == 0 and not any(t["outcome"] in ("robots_disallowed", "rate_limited", "blocked") for t in tried):
+    if not page and _depth == 0 and not cached and not any(t["outcome"] in ("robots_disallowed", "rate_limited", "blocked") for t in tried):
         best = reader if isinstance(reader, dict) else None
         hops = []                     # (url, move id or None, what it is) — the next rungs, best first
         for mv in moves("url_rewrite", host)[:2]:
@@ -795,6 +843,7 @@ def reach(url, want="", full=False, _depth=0, _links=False, fresh=False):
             hops += [(base + mv["spec"]["suffix"], mv["id"], f"detail_suffix #{mv['id']} {mv['spec']['suffix']}")
                      for mv in moves("detail_suffix", host)[:3] if mv["spec"]["suffix"] != learned]
             hops += [(u, None, "on-page link matching the want") for u in _want_links(best, want)]
+            hops += [(u, None, "a sibling the parent listing names") for u in _siblings(url, want)]
         for new, mid, what in hops:
             sub = []
             got, _ = _try_readers(new, want, sub)
@@ -1036,7 +1085,8 @@ def _access_steps(host, code):
 
 # ── actionable errors: what failed, why, and the next call that could fix it ─────────────────────────────────────────
 _PRIORITY = ["robots_disallowed", "blocked", "rate_limited", "challenge", "refused", "silent_refusal", "login_wall", "not_found", "error_page",
-             "js_shell", "thin", "empty", "want_miss", "tls", "network", "server_error", "reader_missing", "http_error"]
+             "js_shell", "thin", "empty", "want_miss", "tls", "network", "server_error", "reader_missing", "http_error",
+             "archive_throttled", "archive_held", "no_archive"]
 
 
 def diagnose(url, want, tried, best=None):
@@ -1118,6 +1168,13 @@ def diagnose(url, want, tried, best=None):
              f"Ask {host} for access through its contact or partner page; say what reads the site and how slowly.",
              "The same information is often published elsewhere: distributors, registries, the maker's documentation CDN.",
              "Retrying in a loop will not help: a stall is a refusal."]),
+        "archive_throttled": ("ARCHIVE_THROTTLED", "The Wayback Machine refused a copy: Scout asked it too fast. Scout holds the "
+                              f"archive for {ARCHIVE_HOLD // 60} minutes (doubling while it refuses) and reads it more slowly after.",
+            ["Wait for the hold to end; cache jobs wait on their own.", "memory('web.archive.org') shows when it ends."]),
+        "archive_held": ("ARCHIVE_HELD", "The Wayback Machine is on hold: it refused Scout recently, so no copy was asked for.",
+            ["Wait for the hold to end, then read again; cache jobs wait on their own."]),
+        "no_archive": ("NO_ARCHIVED_COPY", f"The Wayback Machine has no copy of {url}.",
+            [f"site_map('{root}', archive='only') lists the pages it does hold."]),
         "network": ("NETWORK", f"Could not reach {host}: {next((t.get('detail') for t in tried if t['outcome'] == 'network'), '')}",
             ["Check the url spelling and that the site is up (DNS, timeouts).", "Retry later if the site is slow."]),
         "server_error": ("SERVER_ERROR", f"{host} answered HTTP {status}.", ["Server errors are usually brief: retry later."]),
@@ -1219,13 +1276,14 @@ def _listing_cache(url, urls=None, how=""):
             c.execute("CREATE TABLE IF NOT EXISTS listing (url TEXT PRIMARY KEY, at REAL, how TEXT, urls TEXT)")
             if urls is None:
                 r = c.execute("SELECT at, how, urls FROM listing WHERE url=?", (url,)).fetchone()
-                return (r["at"], r["how"], json.loads(r["urls"])) if r and time.time() - r["at"] < LISTING_TTL else None
+                ttl = max(LISTING_TTL, _mirror_days(url) * 86400)         # a cached site keeps its listing as long as its pages
+                return (r["at"], r["how"], json.loads(r["urls"])) if r and time.time() - r["at"] < ttl else None
             c.execute("INSERT OR REPLACE INTO listing (url, at, how, urls) VALUES (?, ?, ?, ?)", (url, time.time(), how, json.dumps(urls)))
     except sqlite3.Error:
         return None
 
 
-def site_map(url, filter="", limit=500, walk=20, fresh=False, archive="auto"):
+def site_map(url, filter="", limit=500, walk=20, fresh=False, archive="auto", cached=False):
     """The site's real urls: robots.txt sitemaps, a polite link walk when they are thin, and the catalogue's own root
     (found by the scored locale x root parts) when nothing listed so far looks like a catalogue. A listing is reused for
     12 hours unless fresh=True: re-listing a whole site run after run is how crawlers get blocked.
@@ -1235,9 +1293,13 @@ def site_map(url, filter="", limit=500, walk=20, fresh=False, archive="auto"):
         url = "https://" + url
     p = urllib.parse.urlsplit(url)
     root, host = f"{p.scheme}://{p.netloc}", p.netloc.lower()
-    cached = None if fresh else _listing_cache(url)
-    if cached:
-        at, how0, urls = cached
+    hit = None if fresh else _listing_cache(url)
+    if cached and not hit:
+        return {"ok": False, "site": root, "count": 0, "urls": [], "patterns": [], "robots": None, "how": "cached mode",
+                "error": {"code": "NOT_CACHED", "message": f"No listing of {url} in Scout's copy, and cached mode sends no request.",
+                          "next_steps": [f"cache('{url}') lists and downloads the site once, then read it cached"]}}
+    if hit:
+        at, how0, urls = hit
         return _site_map_out(url, root, host, urls, filter, limit, f"reused the listing from {int((time.time() - at) / 60)} min ago ({how0}); "
                              "fresh=true lists again", "cached")
     h = _held(host)
@@ -1530,11 +1592,17 @@ def scout(url, want="", full=False):
     """The whole maze for one url: reach the page, map the site, find its listing, and report what was learned."""
     if "://" not in url:
         url = "https://" + url
-    page = reach(url, want, full)
+    host = _host(url)
+    known = recipes(host)                    # what Scout already has for this site comes first: a passing recipe is the answer
+    page = reach(url, want, full, _links=True)
     sm = site_map(url, limit=50)
     lst = listing(url, sm.get("urls"))
-    host = _host(url)
-    return {"ok": page["ok"], "page": page,
+    # the site's own hosts: ones its page links to that carry its name (regional sites, a store). A host that carries the
+    # name but that the site does not link to is a reseller lead, not the maker (meanwellsource.com, estate 2026-10-04)
+    stem = host.removeprefix("www.").split(".")[0]
+    own = sorted({_host(l["url"]) for l in page.pop("links", None) or [] if _host(l["url"]) != host and len(stem) >= 3
+                  and stem in _host(l["url"]).replace("-", "")})
+    return {"ok": page["ok"], "page": page, "recipes": known, "own_hosts": own,
             "terrain": {"urls": sm["count"], "patterns": sm["patterns"][:10], "how": sm["how"], "robots": sm["robots"],
                         "listing": lst.get("url"), "sample_urls": sm["urls"][:20], "map_error": sm.get("error"),
                         "item_patterns": memory(host)["route"].get("item_patterns"),
@@ -1571,7 +1639,8 @@ STEP_OPS = {"input": "[[regex, replacement], ...] rewrites the input before use,
                    "list, else the first match becomes {url}",
             "links": "a link family shape from families(), like '/chapter/<n>/' or '/products/*'; last step = every "
                      "matching link on the current page, else the first becomes {url}",
-            "extract": "{field: regex}; group 1 (or the whole match) from the current page; every field must be found"}
+            "extract": "{field: regex}; group 1 (or the whole match) from the current page; every field must be found, "
+                       "except one named with a trailing ? ('socket?'), which is filled only when present"}
 _NAME = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}/[a-z0-9-]+$")
 
 
@@ -1627,7 +1696,7 @@ def _check_steps(steps):
     return ""
 
 
-def run(name, input="", recipe=None):
+def run(name, input="", recipe=None, cached=False):
     """Run a compiled recipe. Returns {ok, result: one RESULT line, output, fix (on failure, for whoever recompiles)}."""
     rc = recipe or recipe_get(name)
     if not rc:
@@ -1648,7 +1717,7 @@ def run(name, input="", recipe=None):
             for pat, rep in st["input"]:
                 input = re.sub(pat, rep, input)
         elif op == "reach":
-            r = reach(_fill(st["reach"], input, url), _fill(st.get("want", ""), input, url, True), full=True, _links=True)
+            r = reach(_fill(st["reach"], input, url), _fill(st.get("want", ""), input, url, True), full=True, _links=True, cached=cached)
             if not r["ok"]:
                 return fail(r["error"]["code"], i, r["error"]["next_steps"][0])
             url, page = r["url"], r
@@ -1661,7 +1730,7 @@ def run(name, input="", recipe=None):
                 return fail("FIND_MISS", i, f"no link on {url} matches {st['find']!r}; the page may have changed: recompile")
             url = hit
         elif op == "map":
-            sm = site_map(_fill(st["map"], input, url), _fill(st.get("filter", ""), input, url, True), int(st.get("limit", 20000)))
+            sm = site_map(_fill(st["map"], input, url), _fill(st.get("filter", ""), input, url, True), int(st.get("limit", 20000)), cached=cached)
             if not sm["ok"]:
                 return fail(sm["error"]["code"], i, sm["error"]["next_steps"][0])
             if st.get("same"):
@@ -1688,7 +1757,10 @@ def run(name, input="", recipe=None):
             for field, rx in st["extract"].items():
                 m = re.search(_fill(rx, input, url, True), md, re.I | re.M)
                 val = _clean(m.group(1) if m and m.groups() else m.group(0) if m else "")
-                (got.__setitem__(field, val) if val else missing.append(field))
+                if val:
+                    got[field.rstrip("?")] = val
+                elif not field.endswith("?"):      # "socket?": filled when the page has it, never a failure when not
+                    missing.append(field)
             if missing:
                 return fail("EXTRACT_MISS", i, f"{', '.join(missing)} not found on {url}; the page layout may have changed: recompile")
             out.update(got)
@@ -1755,6 +1827,101 @@ def recipes(host=""):
     return [{"name": r["name"], "about": r["about"], "input": r["input"], "score": round(_score(r["tries"], r["wins"]), 3),
              "runs": r["tries"], "status": "ok" if not r["last_code"] else f"last run failed: {r['last_code']} on {r['last_input']!r}: recompile",
              **card(r["name"], r["input"], (json.loads(r["examples"] or "[]") or [""])[0])} for r in rows]
+
+
+# ── cached mode: download a site once, then read the copy ───────────────────────────────────────────────────────────
+# For pulling a lot from one site: list it, fetch every page once into the mirror at the host's pace (or from the
+# Wayback Machine, with no load on the site at all), then read and run recipes against the copy with cached=true.
+_JOBS = {}
+
+
+def _job(c, host):
+    c.execute("""CREATE TABLE IF NOT EXISTS cache_job (host TEXT PRIMARY KEY, url TEXT, source TEXT, total INTEGER, fetched INTEGER,
+                 failed INTEGER, state TEXT, started REAL, updated REAL, days REAL, how TEXT, pace REAL)""")
+    r = c.execute("SELECT * FROM cache_job WHERE host=?", (host,)).fetchone()
+    return dict(r) if r else None
+
+
+def cache(url, filter="", source="auto", max_pages=2000, days=7, action="start", wait=False):
+    """action=start: list the site (filter narrows it) and download every page once into Scout's copy, in the
+    background, at the host's pace. source: 'archive' (the Wayback Machine: no request to the site), 'live', or 'auto'
+    (live, and the archive where the site walls Scout). The copy is kept `days`. action=status | stop."""
+    if "://" not in url:
+        url = "https://" + url
+    host = _host(url)
+    with _db() as c:
+        j = _job(c, host)
+    if action == "status":
+        if not j:
+            return {"ok": False, "error": {"code": "NO_CACHE_JOB", "message": f"no cache job for {host}", "next_steps": [f"cache('{url}')"]}}
+        left = max(0, j["total"] - j["fetched"] - j["failed"])
+        return {"ok": True, **j, "left": left, "eta_minutes": round(left * (j["pace"] or 1) / 60, 1) if j["state"] == "running" else 0,
+                "next": f"run(recipe, inputs=[...], cached=true) reads the copy" if j["state"] == "done" else "check back with action='status'"}
+    if action == "stop":
+        with _db() as c:
+            c.execute("UPDATE cache_job SET state='stopping' WHERE host=?", (host,))
+        return {"ok": True, "host": host, "state": "stopping"}
+    if host in _JOBS and _JOBS[host].is_alive():
+        return {**cache(url, action="status"), "note": "already downloading"}
+    learn(host, "mirror_days", float(days))
+    sm = site_map(url, filter, limit=max_pages, archive="only" if source == "archive" else "off" if source == "live" else "auto")
+    if not sm["ok"]:
+        return {"ok": False, "host": host, "error": sm.get("error")}
+    urls = sm["urls"][:int(max_pages)]
+    todo = [u for u in urls if not _mirror_get(u)]
+    pace = ARCHIVE_PACE if source == "archive" or _held(host) else max(MIN_INTERVAL, float(memory(host)["route"].get("min_interval") or 0))
+    with _db() as c:
+        _job(c, host)
+        c.execute("INSERT OR REPLACE INTO cache_job VALUES (?, ?, ?, ?, 0, 0, 'running', ?, ?, ?, ?, ?)",
+                  (host, url, source, len(todo), time.time(), time.time(), float(days), sm["how"], pace))
+
+    def work():
+        got = bad = 0
+        why = Counter()
+        for i, u in enumerate(todo, 1):
+            for attempt in range(3):
+                with _db() as c:
+                    if (_job(c, host) or {}).get("state") == "stopping":
+                        break
+                ah = _held(_host(ARCHIVE)) if source != "live" else None
+                if ah and ah.get("until"):          # the archive asked us to slow down: wait it out, never knock through it
+                    if wait:
+                        print(f"  the archive is on hold for {int(ah['until'] - time.time())} s; waiting", flush=True)
+                    time.sleep(max(1, min(ah["until"] - time.time() + 1, 3600)))
+                r = reach(u, _depth=1, _archive_only=(source == "archive"))
+                last = (r["tried"] or [{}])[-1].get("outcome", (r.get("error") or {}).get("code", "?"))
+                if last not in ("archive_throttled", "archive_held"):
+                    break
+            ok = r["ok"] or any(t["outcome"] == "want_miss" for t in r["tried"])
+            got, bad = (got + 1, bad) if ok else (got, bad + 1)
+            if not ok:
+                why[last] += 1
+            if i % 10 == 0 or i == len(todo):
+                with _db() as c:
+                    c.execute("UPDATE cache_job SET fetched=?, failed=?, updated=?, how=? WHERE host=?",
+                              (got, bad, time.time(), sm["how"] + (f"; failed: {dict(why)}" if why else ""), host))
+                if wait:
+                    print(f"  {i}/{len(todo)} fetched {got}, failed {bad}" + (f" ({dict(why)})" if why else ""), flush=True)
+        with _db() as c:
+            st = (_job(c, host) or {}).get("state")
+            c.execute("UPDATE cache_job SET fetched=?, failed=?, updated=?, state=?, how=? WHERE host=?",
+                      (got, bad, time.time(), "stopped" if st == "stopping" else "done",
+                       sm["how"] + (f"; failed: {dict(why)}" if why else ""), host))
+
+    if wait or not todo:
+        work()
+    else:
+        _JOBS[host] = threading.Thread(target=work, daemon=True, name=f"cache:{host}")
+        _JOBS[host].start()
+    return {"ok": True, "host": host, "listed": len(urls), "already_cached": len(urls) - len(todo), "to_fetch": len(todo),
+            "source": source, "pace_s": pace, "eta_minutes": round(len(todo) * pace / 60, 1), "kept_days": days, "how": sm["how"],
+            "next": f"cache('{url}', action='status') to follow it; then run(recipe, inputs=[...], cached=true) or reach(url, cached=true)"}
+
+
+def run_many(name, inputs, cached=False):
+    """One recipe over many inputs: one RESULT line each. With cached=true nothing leaves the machine."""
+    res = [run(name, str(x), cached=cached) for x in inputs]
+    return {"results": [r["result"] for r in res], "ok": sum(r["ok"] for r in res), "failed": sum(not r["ok"] for r in res)}
 
 
 def demo():
@@ -1910,6 +2077,17 @@ def demo():
     pg, rd = _try_readers("https://m.example/p", "", tr)
     assert rd == "mirror" and tr[0]["copy_of"] == "direct", tr
     assert _try_readers("https://m.example/p", "zzz", [])[0] is None, "a want-miss on today's copy does not ask the site again"
+    assert reach("https://nc.example/x", cached=True)["error"]["code"] == "NOT_CACHED"
+    assert site_map("https://nc.example", cached=True)["error"]["code"] == "NOT_CACHED"
+    _mirror_put("https://m.example/q", {"markdown": "y" * 400, "title": "Q", "links": [], "final_url": "https://m.example/q"}, "archive")
+    assert reach("https://m.example/q", cached=True)["reader"] == "mirror"
+    miss = reach("https://m.example/q", "zzz", cached=True)
+    assert not miss["ok"] and [t["reader"] for t in miss["tried"]] == ["mirror"], "cached mode never leaves the machine"
+    learn("m.example", "mirror_days", 30.0)
+    assert _mirror_days("https://m.example/q") == 30.0
+    assert cache("https://nj.example", action="status")["error"]["code"] == "NO_CACHE_JOB"
+    e = diagnose("https://a.example/x", "", [{"outcome": "archive_throttled", "reader": "archive"}])
+    assert e["code"] == "ARCHIVE_THROTTLED", e
     print("scout: ok")
 
 
