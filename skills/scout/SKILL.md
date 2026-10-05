@@ -16,6 +16,15 @@ Call `scout` with `url` and `want`.
 - If `recipes` already has one for what the user wants and its status is ok, use it with `run` and stop here.
 - If you found the site by searching, check `own_hosts`. A host that carries the subject's name but that its site
   doesn't link to is a reseller, not the maker.
+- Make sure the site is the company or body you mean. Same-name companies are common: Edwards Lifesciences is not
+  Edwards fire safety, simplex.com is a crypto firm and not Simplex fire, and sol.com is not Sol-Ark. The page should
+  name the product line the user means.
+- Read the site's terms of use before scouting it in bulk. robots.txt isn't the only rule. LexisNexis, for example,
+  forbids automated access without written permission. If the terms forbid it, don't scout: record the permission
+  request with `enroll` (route 'commercial', signup_url the contact the terms name), and offer the user a short email
+  asking for permission or a bulk copy.
+- When `reach` returns `jsonld` (schema.org data), prefer a `jsonld` recipe step over regexes on the page text: names,
+  SKUs and prices there are cleaner than the html.
 - If the user will pull a lot from this site (many pages, a long list of models), use cached mode. Call
   `cache(url, filter=…)`, with `source='archive'` when the site walls Scout or should not be loaded. Then run recipes
   with `inputs=[…]` and `cached=true`.
@@ -53,6 +62,9 @@ Once you have reached good information, turn the path you took into a recipe, so
    - `extract`: pull one regex per field from the page
 4. Call `compile`. Scout runs the recipe on every example and saves it only if all of them pass. If a test fails, read
    the failing RESULT line and `next_steps`, fix that step, and compile again. Stop after three tries.
+5. Read the values in the test RESULT lines yourself. Counting found fields proves nothing: Depot once landed 17,126 law
+   sections with zero errors, and they were a site's menu or text with every "t" missing. Scout refuses obvious menus
+   and missing letters (`BAD_VALUE`), but a wrong-but-plausible value only a reader catches.
 
 ## 3. Report
 

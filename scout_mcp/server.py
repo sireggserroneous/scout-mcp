@@ -107,6 +107,7 @@ async def compile(name: str, steps: list, examples: list | None = None, about: s
       {"reach": "https://site/p/{input}" | "{url}", "want": regex}   read a page
       {"find": regex}   first link on the page matching (url or text) becomes {url}
       {"links": "/chapter/<n>/"}   a link family from families(); last step = all its links, else the first is {url}
+      {"jsonld": {"price": "offers.price", "sku": "sku"}, "type": "Product"}   from the page's schema.org data
       {"extract": {"field": "regex with one group", "optional?": "..."}}   every field must be found, except a name ending in ?
     Prefer map over a guessed url template: sites are inconsistent about case and slugs."""
     return await asyncio.to_thread(S.compile_recipe, name, steps, examples, about, input_name)

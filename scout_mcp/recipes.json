@@ -253,6 +253,21 @@
   "account.samsung.com": {
    "wall": "ROBOTS_DISALLOWED"
   },
+  "advance.lexis.com": {
+   "access": {
+    "route": "commercial",
+    "name": "LexisNexis written permission (its terms forbid automated access)",
+    "signup_url": "mailto:llp.webmaster@lexisnexis.com",
+    "auth": {
+     "kind": "none"
+    },
+    "cost": "by agreement",
+    "key": "LEXISNEXIS",
+    "terms": "\"Access or use the Online Services via mechanical, programmatic, robotic, scripted or any other automated means is strictly prohibited without our express prior written permission\"; this covers AI agents too. Ask for written permission or a bulk copy",
+    "notes": "Several states publish their official code only through LexisNexis public access (Mississippi, for one). Public.Resource.Org's scans of state codes on archive.org are an older alternative.",
+    "checked": "2026-10-04"
+   }
+  },
   "alaskacountyoffices.org": {
    "wall": "CHALLENGE_WALL",
    "access": {
@@ -1016,7 +1031,20 @@
    "render": true
   },
   "www.lexisnexis.com": {
-   "wall": "LOGIN_REQUIRED"
+   "wall": "LOGIN_REQUIRED",
+   "access": {
+    "route": "commercial",
+    "name": "LexisNexis written permission (its terms forbid automated access)",
+    "signup_url": "mailto:llp.webmaster@lexisnexis.com",
+    "auth": {
+     "kind": "none"
+    },
+    "cost": "by agreement",
+    "key": "LEXISNEXIS",
+    "terms": "\"Access or use the Online Services via mechanical, programmatic, robotic, scripted or any other automated means is strictly prohibited without our express prior written permission\"; this covers AI agents too. Ask for written permission or a bulk copy",
+    "notes": "Several states publish their official code only through LexisNexis public access (Mississippi, for one). Public.Resource.Org's scans of state codes on archive.org are an older alternative.",
+    "checked": "2026-10-04"
+   }
   },
   "www.lifesafetypower.com": {
    "listing": "https://www.lifesafetypower.com/en/products",
@@ -1264,6 +1292,39 @@
       "tdp": "^\\s*Default TDP\\s*\\n\\s*:\\s*(\\S.*)$",
       "launched": "^\\s*Launch Date\\s*\\n\\s*:\\s*(\\S.*)$",
       "socket?": "^\\s*CPU Socket\\s*\\n\\s*:\\s*(\\S.*)$"
+     }
+    }
+   ]
+  },
+  {
+   "name": "crucial.com/ssd",
+   "about": "Crucial SSD name and price by SKU, from the page's schema.org data (read from the Wayback Machine while crucial.com refuses Scout)",
+   "input": "sku",
+   "examples": [
+    "CT4000T705SSD5",
+    "CT2000P3PSSD8",
+    "CT1000T500SSD8"
+   ],
+   "steps": [
+    {
+     "map": "https://www.crucial.com/ssd/",
+     "filter": "/ssd/[^/]+/ct\\w+$",
+     "same": [
+      [
+       "[^a-z0-9]",
+       ""
+      ]
+     ]
+    },
+    {
+     "reach": "{url}"
+    },
+    {
+     "jsonld": {
+      "name": "name",
+      "sku": "sku",
+      "price": "offers.price",
+      "currency?": "offers.priceCurrency"
      }
     }
    ]

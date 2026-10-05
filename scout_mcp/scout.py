@@ -10,7 +10,7 @@ When it cannot reach good data it says why, in a coded error with concrete next 
 What a capable model works out about a site, it compiles into a recipe: a tested plan Scout runs itself, so a small
 model's whole job is one call and one RESULT line.
 """
-import gzip, io, json, os, re, sqlite3, threading, time
+import gzip, http.client, io, json, os, re, sqlite3, threading, time
 import urllib.error, urllib.parse, urllib.request, urllib.robotparser
 from collections import Counter
 from pathlib import Path
@@ -33,8 +33,8 @@ ENGINE_ORDER = ["direct", "firecrawl", "crawl4ai", "browser"]       # cheapest f
 # 2026-10-03: 1,543 of AMD's product pages, newest a day old, while amd.com blocked us). It never becomes a host's
 # winning reader, so live reading resumes when the site allows it; robots.txt still binds what Scout reads from it.
 ARCHIVE = os.environ.get("SCOUT_ARCHIVE", "https://web.archive.org").rstrip("/")
-ARCHIVE_PACE = 4.5           # the Wayback Machine allows ~15 copies a minute; 2 s got Scout refused (2026-10-04)
-ARCHIVE_HOLD = 600           # the archive refused us: leave it alone this long (doubling while it keeps refusing)
+ARCHIVE_PACE = 5.0           # the Wayback Machine allows ~15 copies a minute; 2 s got Scout and Depot refused (2026-10-03/04)
+ARCHIVE_HOLD = 900           # the archive refused us: leave it alone 15 minutes (doubling while it keeps refusing)
 ARCHIVE_WHEN = {"blocked", "rate_limited", "silent_refusal", "challenge", "refused", "login_wall", "network", "server_error"}
 MIRROR_DAYS = float(os.environ.get("SCOUT_MIRROR_DAYS", "1"))   # a good page is re-read from disk this long: download once
 RENDERERS = {"firecrawl", "crawl4ai", "browser"}
@@ -50,7 +50,8 @@ _LOCALE = re.compile(r"^/((?:[a-z]{2}[-_])?[a-z]{2}(?:[-_][a-z]{2})?)(/(?:[a-z]{
 
 _CHALLENGE = re.compile(r"just a moment|attention required|captcha|verify you are (?:a )?human|are you a (?:human|robot)|"
                         r"cf-browser-verification|enable javascript and cookies|unusual traffic|access denied|"
-                        r"before you continue|cookie consent", re.I)
+                        r"before you continue|cookie consent|"
+                        r"performing security verification|protect against malicious bots|verif(?:y|ies) you are", re.I)   # Cloudflare's 2026 wall
 _LOGIN = re.compile(r"\b(sign in|log ?in|api key required|unauthori[sz]ed|subscribe to (?:continue|read))\b", re.I)
 _ERROR_PAGE = re.compile(r"\b(404|page not found|not found|page (?:doesn't|does not) exist|no longer available)\b", re.I)
 # A block page needs BOTH halves: a refusal, and something about the visitor. A state revisor's site served "Blocked <our
@@ -214,8 +215,12 @@ def _throttled(host, kind, retry_after, text):
     prev = memory(host)["route"].get("hold") or {}
     try:
         secs = float(retry_after or 0)
-    except ValueError:
-        secs = 0.0
+    except ValueError:                       # Retry-After may be an HTTP date: wait as long as the site asks, every time
+        try:
+            import email.utils
+            secs = max(0.0, email.utils.parsedate_to_datetime(retry_after).timestamp() - time.time())
+        except (TypeError, ValueError):
+            secs = 0.0
     secs = max(secs, HOLD_S if kind in ("blocked", "silent_refusal") else ARCHIVE_HOLD if kind == "archive" else 120.0)
     if prev.get("until"):
         secs = max(secs, 2 * (prev["until"] - prev["since"]))
@@ -413,6 +418,41 @@ def _polite(url):
 
 
 # ── readers ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+def _decode(raw, ctype=""):
+    """A page's text in the charset it was written in (Depot, 2026-10-03). Strict utf-8 first: bytes that decode cleanly
+    as utf-8 are utf-8. Then the declared charset, but never utf-16/32 without a byte-order mark: Delaware's pages declare
+    utf-16 and are utf-8, and trusting it gave CJK noise. Then windows-1252: Oregon's pages lost every § as utf-8."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    m = re.search(r"charset=[\"']?([\w.-]+)", ctype or "") or re.search(rb"<meta[^>]+charset=[\"']?([\w.-]+)", raw[:4096], re.I)
+    cs = (m.group(1).decode() if isinstance(m.group(1), bytes) else m.group(1)).lower() if m else ""
+    if cs.startswith(("utf-16", "utf-32", "ucs")) and not raw[:4].startswith((b"\xff\xfe", b"\xfe\xff", b"\x00\x00\xfe\xff")):
+        cs = ""
+    if cs and cs not in ("utf-8", "utf8"):
+        try:
+            return raw.decode(cs, "replace")
+        except LookupError:
+            pass
+    return raw.decode("cp1252", "replace")
+
+
+def _jsonld(soup):
+    """The page's schema.org data (<script type="application/ld+json">), as a flat list of typed nodes. Product pages that
+    are a mess as html often carry clean Product data here (Crucial, Leviton: Depot, 2026-10-03/04)."""
+    out = []
+    for t in soup.find_all("script", type=re.compile("ld\\+json", re.I)):
+        try:
+            d = json.loads(t.string or t.get_text() or "")
+        except ValueError:
+            continue
+        for node in (d if isinstance(d, list) else [d]):
+            if isinstance(node, dict):
+                out += [n for n in ([node] + list(node.get("@graph") or [])) if isinstance(n, dict) and n.get("@type")]
+    return out[:20]
+
+
 def _convert(raw, ctype, url):
     """Bytes -> {markdown, title, links, shell}. PDFs read by their text layer."""
     if "pdf" in (ctype or "").lower() or raw[:5] == b"%PDF-":
@@ -427,7 +467,8 @@ def _convert(raw, ctype, url):
     from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
     from markdownify import markdownify
     warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
-    soup = BeautifulSoup(raw, "html.parser")
+    soup = BeautifulSoup(_decode(raw, ctype), "html.parser")
+    ld = _jsonld(soup)
     links = []
     for a in soup.find_all("a", href=True):
         href = urllib.parse.urljoin(url, a["href"].split("#")[0].strip())
@@ -443,7 +484,7 @@ def _convert(raw, ctype, url):
     body = soup.find("main") or soup.find("article") or soup.body or soup
     md = re.sub(r"\n{3,}", "\n\n", markdownify(str(body), heading_style="ATX", bullets="-")).strip()
     shell = (len(md) < MIN_GOOD and scripts >= 3) or (len(md) < 2000 and bool(_JS_NEEDED.search(md)))
-    return {"markdown": md, "title": title, "links": links, "shell": shell}
+    return {"markdown": md, "title": title, "links": links, "shell": shell, **({"jsonld": ld} if ld else {})}
 
 
 def _direct(url, timeout):
@@ -470,8 +511,15 @@ def _direct(url, timeout):
 
 def _post(url, payload, headers, timeout):
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json", **headers})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read() or b"{}")
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read() or b"{}")
+        except (ConnectionResetError, http.client.RemoteDisconnected, http.client.IncompleteRead):
+            # a pooled connection to a renderer service the network quietly expired: once more, fresh (estate, 2026-10-04)
+            if attempt == 2:
+                raise
+            time.sleep(3)
 
 
 def _firecrawl(url, timeout):
@@ -522,15 +570,22 @@ def _have_browser():
         return False
 
 
-def _archive(url, timeout):
-    """The latest Wayback Machine copy of `url`, as the site served it (the id_ form: no archive toolbar), with links
-    resolved against the site's own address. 404 means the archive has no copy."""
-    copy = f"{ARCHIVE}/web/{time.strftime('%Y%m%d%H%M%S', time.gmtime())}id_/{url}"
+class BadCapture(Exception):
+    """The archive answered with a copy of the site's own error or block page (its Memento-Datetime header says it is
+    a replay), not with a refusal of its own: AMD's newest copies of some pages are Akamai's 403 (Depot, 2026-10-03)."""
+
+
+def _archive(url, timeout, stamp=None):
+    """The Wayback Machine copy of `url` nearest `stamp` (default: now), as the site served it (the id_ form: no archive
+    toolbar), with links resolved against the site's own address. 404 means the archive has no copy."""
+    copy = f"{ARCHIVE}/web/{stamp or time.strftime('%Y%m%d%H%M%S', time.gmtime())}id_/{url}"
     _polite(copy)
     try:
         with urllib.request.urlopen(urllib.request.Request(copy, headers=HEADERS), timeout=timeout) as r:
             raw, ctype, final = r.read(MAX_BYTES), r.headers.get("Content-Type", ""), r.geturl()
     except urllib.error.HTTPError as e:
+        if e.headers and (e.headers.get("Memento-Datetime") or any(k.lower().startswith("x-archive-orig") for k in e.headers.keys())):
+            raise BadCapture(f"the archived copy is the site's own HTTP {e.code}") from None
         raise Status(e.code) from None
     if raw[:2] == b"\x1f\x8b":
         raw = gzip.decompress(raw)
@@ -538,6 +593,17 @@ def _archive(url, timeout):
     page = _convert(raw, ctype, url)
     page.update(final_url=url, archived={"captured": (f"{m.group(1)[:4]}-{m.group(1)[4:6]}-{m.group(1)[6:8]}" if m else None), "copy": final})
     return page
+
+
+def _good_captures(url, n=4):
+    """Timestamps of the newest distinct captures of `url` the site served with status 200, newest first. A 200 is not
+    proof: crucial.com's edge served its rejection page with a 200, and the archive kept that (2026-10-05)."""
+    q = urllib.parse.urlencode([("url", url), ("output", "json"), ("filter", "statuscode:200"), ("fl", "timestamp,digest"),
+                                ("collapse", "digest"), ("limit", str(-25))])
+    _polite(f"{ARCHIVE}/cdx/")
+    with urllib.request.urlopen(urllib.request.Request(f"{ARCHIVE}/cdx/search/cdx?{q}", headers=HEADERS), timeout=60) as r:
+        rows = json.loads(r.read() or b"[]")[1:]
+    return [row[0] for row in reversed(rows)][:n]
 
 
 def wayback_urls(url, limit=20000, years=2):
@@ -590,7 +656,7 @@ def _mirror_put(url, page, reader):
     try:
         path = _mirror_path(url)
         path.parent.mkdir(parents=True, exist_ok=True)
-        keep = {k: page.get(k) for k in ("markdown", "title", "links", "final_url", "archived")}
+        keep = {k: page.get(k) for k in ("markdown", "title", "links", "final_url", "archived", "jsonld")}
         keep["markdown"] = (keep["markdown"] or "")[:2_000_000]
         path.write_text(json.dumps({**keep, "reader": reader}))
     except OSError:
@@ -700,7 +766,25 @@ def _try_readers(url, want, tried, fresh=False, archive_only=False):
                           "until": ah.get("until")})
             return None, best
         try:
-            page = _archive(url, TIMEOUT["archive"])
+            page = None
+            try:
+                page = _archive(url, TIMEOUT["archive"])
+                bad = judge(page) in ("blocked", "challenge", "error_page")
+            except BadCapture:
+                bad = True
+            if bad:                     # the newest copy is the site's block or error page: walk back to a real one
+                seen = ((page or {}).get("archived") or {}).get("copy", "")
+                for stamp in _good_captures(url):
+                    if stamp in seen:
+                        continue
+                    page = _archive(url, TIMEOUT["archive"], stamp)
+                    if judge(page) not in ("blocked", "challenge", "error_page"):
+                        break
+                else:
+                    raise BadCapture("the archive holds no good copy of this page: its captures are the site's error or block pages")
+        except BadCapture as e:
+            tried.append({"url": url, "reader": "archive", "outcome": "no_archive", "detail": str(e)[:120]})
+            return None, best
         except Exception as e:  # noqa: BLE001
             refused = getattr(e, "status", 0) in (403, 429, 503) or re.search(r"refused|reset|aborted", str(e), re.I)
             tried.append({"url": url, "reader": "archive", "outcome": "archive_throttled" if refused else "no_archive",
@@ -767,10 +851,15 @@ def _live(url, want, tried, host):
     return None, best
 
 
+# words that never steer a link choice: "law", "and", "section" narrowed searches to nothing (estate scout, 2026-10-03)
+_STEER_STOP = frozenset("the of and to in a an or by for with from on at as is are be this that which page pages section sections "
+                        "chapter title part article law laws code item items product products".split())
+
+
 def _want_links(page, want, limit=3):
     if not want:
         return []
-    words = [w for w in re.split(r"[^a-z0-9]+", want.lower()) if len(w) > 2]
+    words = [w for w in re.split(r"[^a-z0-9]+", want.lower()) if len(w) > 2 and w not in _STEER_STOP]
     host = _host(page.get("final_url") or "")
     seen, out = set(), []
     for l in page.get("links") or []:
@@ -784,7 +873,7 @@ def _siblings(url, want, limit=2):
     """The page lacks what was asked: climb to the page listing it and its siblings, and take the sibling links whose
     own line names two thirds of the request's words (estate scout, 2026-10-04: Depot held New York's Criminal Procedure
     Law, the prompt asked for its Estates, Powers and Trusts Law, and the CPL's parent listing named the EPTL)."""
-    words = {w for w in re.findall(r"[a-z0-9]{3,}", re.sub(r"\\[a-z]", " ", want.lower()))}
+    words = {w for w in re.findall(r"[a-z0-9]{3,}", re.sub(r"\\[a-z]", " ", want.lower()))} - _STEER_STOP
     if not words:
         return []
     need, p = max(1, -(-2 * len(words) // 3)), urllib.parse.urlsplit(url)
@@ -864,6 +953,7 @@ def reach(url, want="", full=False, _depth=0, _links=False, fresh=False, cached=
         return {"ok": True, "url": page.get("final_url") or url, "requested_url": url, "via": via,
                 "reader": [t for t in tried if t["outcome"] == "ok"][-1]["reader"], "title": page.get("title", ""),
                 **({"archived": page["archived"]} if page.get("archived") else {}),
+                **({"jsonld": page["jsonld"]} if page.get("jsonld") else {}),
                 "chars": len(md), "prose": prose(md), "markdown": excerpt(md, want, full), "tried": tried, "learned": memory(host),
                 **({"links": page.get("links") or []} if _links else {})}
     best = reader if isinstance(reader, dict) else None
@@ -956,7 +1046,7 @@ def _auth(url):
     if not a or a["auth"]["kind"] in ("none", None):
         return url, {}, []
     k, kind, name = _keys(), a["auth"]["kind"], a["auth"].get("name")
-    key, extra, secrets = k.get(a["key"]), {}, []
+    cred, extra, secrets = k.get(a["key"]), {}, []   # never call the secret `key`: Pixel's leak, 2026-10-04
     if kind == "oauth2_client_credentials":
         cid, sec = k.get(a["key"] + "_ID"), k.get(a["key"] + "_SECRET")
         if cid and sec:
@@ -964,17 +1054,17 @@ def _auth(url):
             extra = {"Authorization": f"Bearer {tok}", **{h: v.replace("{client_id}", cid) for h, v in (a["auth"].get("headers") or {}).items()}}
             secrets = [tok, cid, sec]
         return url, extra, secrets
-    if not key:
+    if not cred:
         return url, {}, []
     if kind == "query":
         p = urllib.parse.urlsplit(url)
-        q = urllib.parse.urlencode(urllib.parse.parse_qsl(p.query) + [(name or "key", key)])
+        q = urllib.parse.urlencode(urllib.parse.parse_qsl(p.query) + [(name or "key", cred)])
         url = urllib.parse.urlunsplit(p._replace(query=q))
     elif kind == "header":
-        extra = {name or "X-Api-Key": key}
+        extra = {name or "X-Api-Key": cred}
     elif kind == "bearer":
-        extra = {"Authorization": f"Bearer {key}"}
-    return url, extra, [key]
+        extra = {"Authorization": f"Bearer {cred}"}
+    return url, extra, [cred]
 
 
 def _scrub(text, secrets):
@@ -1325,11 +1415,15 @@ def site_map(url, filter="", limit=500, walk=20, fresh=False, archive="auto", ca
     for sm in declared[:5]:
         urls += _sitemap_urls(sm, seen, 20000)
     how = [f"sitemaps: {len(urls)} urls from {len(seen)} file(s)"]
-    on = lambda u: urllib.parse.urlsplit(u).netloc.lower().removeprefix("www.") == host.removeprefix("www.")
+    # a map started inside one section stays inside it (estate scout, 2026-10-03: a walk started in one code wandered
+    # into the rest of the site); the site's root maps the whole site
+    scope = p.path if p.path.endswith("/") else p.path.rsplit("/", 1)[0] + "/"
+    inside = lambda u: scope in ("", "/") or urllib.parse.urlsplit(u).path.startswith(scope) or urllib.parse.urlsplit(u).path.rstrip("/") == scope.rstrip("/")
+    on = lambda u: urllib.parse.urlsplit(u).netloc.lower().removeprefix("www.") == host.removeprefix("www.") and inside(u)
     urls = [u for u in dict.fromkeys(urls) if on(u) and rp.can_fetch(UA, u)]
     if len(urls) < 50 and walk and not _held(host):      # thin or no sitemap: walk the site's own links
         how.append(f"link walk: opened {_walk_links([url, root + '/'], host, on, rp, walk, urls)} page(s)")
-    if walk and not _held(host) and (len(urls) < 50 or not any(_CATALOG.search(urllib.parse.urlsplit(u).path) for u in urls)):
+    if walk and scope in ("", "/") and not _held(host) and (len(urls) < 50 or not any(_CATALOG.search(urllib.parse.urlsplit(u).path) for u in urls)):
         # nothing that looks like a catalogue yet: find its root by the scored parts and walk from there (amd.com's map
         # was blogs until /en/products was walked: 1,561 product pages, Depot 2026-10-03)
         lst = listing(url, urls)
@@ -1595,7 +1689,7 @@ def scout(url, want="", full=False):
     host = _host(url)
     known = recipes(host)                    # what Scout already has for this site comes first: a passing recipe is the answer
     page = reach(url, want, full, _links=True)
-    sm = site_map(url, limit=50)
+    sm = site_map(f"https://{host}/", limit=50)          # the site's map; a map from a deep url stays inside that section
     lst = listing(url, sm.get("urls"))
     # the site's own hosts: ones its page links to that carry its name (regional sites, a store). A host that carries the
     # name but that the site does not link to is a reseller lead, not the maker (meanwellsource.com, estate 2026-10-04)
@@ -1639,6 +1733,8 @@ STEP_OPS = {"input": "[[regex, replacement], ...] rewrites the input before use,
                    "list, else the first match becomes {url}",
             "links": "a link family shape from families(), like '/chapter/<n>/' or '/products/*'; last step = every "
                      "matching link on the current page, else the first becomes {url}",
+            "jsonld": "{field: dotted path} read from the current page's schema.org data, e.g. {'price': 'offers.price', "
+                      "'sku': 'sku'}; optional 'type': 'Product' (default); a name ending in ? is optional",
             "extract": "{field: regex}; group 1 (or the whole match) from the current page; every field must be found, "
                        "except one named with a trailing ? ('socket?'), which is filled only when present"}
 _NAME = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,}/[a-z0-9-]+$")
@@ -1663,6 +1759,42 @@ def _same(v, rules):
     return v
 
 
+# Values that are not content (Depot, 2026-10-04: "every check counted, none read"). 29,299 sections landed as a site's
+# menu ("Skip navigation Home Documents …"), and a double-escaped character class turned every "t" of 9,308 Alabama
+# sections into a space ("he books… o de ermine he accuracy"); 17,126 landed with 0 errors.
+_CHROME = re.compile(r"(?i)skip (?:navigation|to (?:main )?content)|menu website search|\bhref=|[.#][\w-]+\s*\{\s*[\w-]+\s*:")
+
+
+def not_content(text):
+    """Why an extracted value is not content ("" when it may be): the page's chrome, or letters lost to a broken cleaner."""
+    if _CHROME.search(text[:6000]):
+        return "page chrome (menu, markup or a stylesheet)"
+    low = text.lower()
+    letters = sum(c.isalpha() for c in low)
+    if letters > 80 and min(low.count("t"), low.count("e")) < letters * 0.02:
+        return "letters missing (a broken cleaner or a double-escaped regex)"
+    return ""
+
+
+def _untail(v, host=""):
+    """A name without the page-title tail: "Crucial T705 4TB SSD | CT4000T705SSD5 | crucial.com" -> "Crucial T705 4TB SSD"
+    (Depot, 2026-10-03). Only tail segments that name the site or look like a part number are cut."""
+    stem = (host or "").removeprefix("www.").split(".")[0].lower()
+    parts = re.split(r"\s+[|·–—]\s+", v)
+    while len(parts) > 1 and ((stem and stem in parts[-1].lower()) or re.fullmatch(r"[A-Z0-9][A-Z0-9-]{4,}", parts[-1].strip())):
+        parts.pop()
+    return " | ".join(parts)
+
+
+def _dig(node, path):
+    """'offers.price' through dicts; a list on the way takes its first element."""
+    for part in path.split("."):
+        if isinstance(node, list):
+            node = node[0] if node else None
+        node = node.get(part) if isinstance(node, dict) else None
+    return node[0] if isinstance(node, list) and node else node
+
+
 def _clean(v):
     return " ".join(re.sub(r"[*_`|]+", " ", v or "").split())[:200]
 
@@ -1684,6 +1816,10 @@ def _check_steps(steps):
             rxs = [p[0] for p in st["same"]] if isinstance(st["same"], list) and all(isinstance(p, list) and len(p) == 2 for p in st["same"]) else ["("]
         if op == "input":
             rxs = [p[0] for p in st["input"]] if isinstance(st["input"], list) and all(isinstance(p, list) and len(p) == 2 for p in st["input"]) else ["("]
+        if op == "jsonld" and not (isinstance(st["jsonld"], dict) and st["jsonld"]):
+            return f"step {i}: jsonld needs {{field: 'dotted.path'}}"
+        if op == "jsonld":
+            rxs = []
         if op == "extract" and not (isinstance(st["extract"], dict) and st["extract"]):
             return f"step {i}: extract needs {{field: regex}}"
         for rx in rxs:
@@ -1691,6 +1827,9 @@ def _check_steps(steps):
                 re.compile(_fill(str(rx or ""), "x", "https://x", True))
             except re.error as e:
                 return f"step {i}: regex {rx!r} does not compile: {e}"
+            if re.search(r"\[[^\]]*\\\\[a-z][^\]]*\]", str(rx or "")):
+                return (f"step {i}: regex {rx!r} has a double-escaped escape inside a character class: '\\\\t' there means a "
+                        "backslash or the letter t, so every t is lost (Depot's Alabama text). Use one backslash.")
     if next((next(iter(st)) for st in steps if next(iter(st)) != "input"), None) not in ("reach", "map"):
         return "the first step after any input step must be reach or map: a recipe starts from a url"
     return ""
@@ -1751,6 +1890,20 @@ def run(name, input="", recipe=None, cached=False):
             if i == len(rc["steps"]):
                 out = {"count": len(hits), "first": hits[0], "urls": hits}
             url = hits[0]
+        elif op == "jsonld":
+            want_t = str(st.get("type", "Product")).lower()
+            nodes = [n for n in (page or {}).get("jsonld") or [] if want_t in str(n.get("@type", "")).lower()]
+            got, missing = {}, []
+            for field, path in st["jsonld"].items():
+                v = _dig(nodes[0], path) if nodes else None
+                if v not in (None, "", []):
+                    got[field.rstrip("?")] = _clean(_untail(str(v), _host(url)))
+                elif not field.endswith("?"):
+                    missing.append(field)
+            if missing:
+                return fail("JSONLD_MISS", i, f"{', '.join(missing)} not in {url}'s schema.org {st.get('type', 'Product')} data"
+                            + ("" if nodes else " (the page carries none)") + ": use extract on the page text, or recompile")
+            out.update(got)
         elif op == "extract":
             md = re.sub(r"\[excerpt: .*?\]$", "", (page or {}).get("markdown", ""))
             got, missing = {}, []
@@ -1763,6 +1916,9 @@ def run(name, input="", recipe=None, cached=False):
                     missing.append(field)
             if missing:
                 return fail("EXTRACT_MISS", i, f"{', '.join(missing)} not found on {url}; the page layout may have changed: recompile")
+            bad = {f: not_content(v) for f, v in got.items() if not_content(v)}
+            if bad:
+                return fail("BAD_VALUE", i, "; ".join(f"{f}: {why}" for f, why in bad.items()) + f" on {url}: fix the regex and recompile")
             out.update(got)
     if not recipe:
         _score_recipe(name, True, None, raw)
@@ -1855,13 +2011,17 @@ def cache(url, filter="", source="auto", max_pages=2000, days=7, action="start",
         if not j:
             return {"ok": False, "error": {"code": "NO_CACHE_JOB", "message": f"no cache job for {host}", "next_steps": [f"cache('{url}')"]}}
         left = max(0, j["total"] - j["fetched"] - j["failed"])
+        if j["state"] == "running" and not (host in _JOBS and _JOBS[host].is_alive()) and time.time() - j["updated"] > 120:
+            # the process that ran it is gone (Depot's re-reads died with the one-off script that started them, 2026-10-05)
+            j["state"] = "interrupted"
+            return {"ok": True, **j, "left": left, "next": f"cache('{j['url']}') again resumes: pages already copied are skipped"}
         return {"ok": True, **j, "left": left, "eta_minutes": round(left * (j["pace"] or 1) / 60, 1) if j["state"] == "running" else 0,
                 "next": f"run(recipe, inputs=[...], cached=true) reads the copy" if j["state"] == "done" else "check back with action='status'"}
     if action == "stop":
         with _db() as c:
             c.execute("UPDATE cache_job SET state='stopping' WHERE host=?", (host,))
         return {"ok": True, "host": host, "state": "stopping"}
-    if host in _JOBS and _JOBS[host].is_alive():
+    if host in _JOBS and _JOBS[host].is_alive():   # one download per site at a time
         return {**cache(url, action="status"), "note": "already downloading"}
     learn(host, "mirror_days", float(days))
     sm = site_map(url, filter, limit=max_pages, archive="only" if source == "archive" else "off" if source == "live" else "auto")
@@ -2088,6 +2248,24 @@ def demo():
     assert cache("https://nj.example", action="status")["error"]["code"] == "NO_CACHE_JOB"
     e = diagnose("https://a.example/x", "", [{"outcome": "archive_throttled", "reader": "archive"}])
     assert e["code"] == "ARCHIVE_THROTTLED", e
+    assert _decode("§ 1-1".encode("utf-8"), "text/html; charset=utf-16") == "§ 1-1", "a utf-16 claim without a BOM is ignored"
+    assert _decode("§ 1".encode("cp1252"), "") == "§ 1"
+    assert judge({"markdown": "Performing security verification. This website uses a security service to protect against malicious bots. " * 3}) == "challenge"
+    ld = _convert(b'<html><script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Product","name":"T705 4TB",'
+                  b'"sku":"CT4000T705SSD5","offers":[{"@type":"Offer","price":"565.99"}]}]}</script><body><p>x</p></body></html>', "text/html", "https://c.example/p")["jsonld"]
+    assert _dig(ld[0], "offers.price") == "565.99" and _dig(ld[0], "sku") == "CT4000T705SSD5"
+    assert _check_steps([{"reach": "https://c.example/p"}, {"jsonld": {"price": "offers.price", "gtin?": "gtin13"}}]) == ""
+    assert "section" in _STEER_STOP and not [w for w in ["the", "section", "and"] if w not in _STEER_STOP]
+    assert not_content("Skip navigation Home Documents Senate Assembly " * 3) and not_content(
+        "he books of accoun shall be kep a he office of he coun y reasurer for regular inspec ion by he audi or and he board")
+    assert not_content("The books of account shall be kept at the office of the county treasurer for inspection by the auditor.") == ""
+    assert "double-escaped" in _check_steps([{"reach": "https://a.example/"}, {"extract": {"text": "^([^\\\\t]+)$"}}])
+    assert _check_steps([{"reach": "https://a.example/"}, {"extract": {"text": "^([^\\t]+)$"}}]) == ""
+    import email.utils
+    t3 = _throttled("ra.example", "rate_limited", email.utils.formatdate(time.time() + 600, usegmt=True), "")
+    assert t3["until"] - time.time() > 500, "an HTTP-date Retry-After is honoured"
+    assert _untail("Crucial T705 4TB PCIe Gen5 NVMe M.2 SSD | CT4000T705SSD5 | crucial.com", "www.crucial.com") == "Crucial T705 4TB PCIe Gen5 NVMe M.2 SSD"
+    assert _untail("Wiring Devices | Lighting Controls", "www.leviton.com") == "Wiring Devices | Lighting Controls"
     print("scout: ok")
 
 

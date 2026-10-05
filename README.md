@@ -112,6 +112,7 @@ RESULT: fail | mikrotik.com/specs | nope 9 | NO_MATCH at step 1
 | `{"reach": "https://…/{input}" \| "{url}", "want": regex}` | reads a page with the full reader ladder (below) |
 | `{"find": regex}` | the first link on the page whose url or text matches becomes `{url}` |
 | `{"links": "/chapter/<n>/"}` | a link family from `families`. Last step: every matching link on the page. Otherwise: the first becomes `{url}`. |
+| `{"jsonld": {"price": "offers.price"}, "type": "Product"}` | reads the page's schema.org data by dotted path. A name ending in `?` is optional. |
 | `{"extract": {"field": regex, "optional?": regex}}` | group 1 of each regex. Every field must be found, except one whose name ends in `?`, which is filled only when the page has it. |
 
 ## How Scout learns: a maze, a Markov chain, and rewrite rules
@@ -366,6 +367,50 @@ These rules come from the sibling crawler's queue:
 - **The sibling the request names.** When a page lacks what was asked, one of Scout's next steps climbs to the page
   that lists it and its siblings, and follows the sibling link that names two-thirds of the request's words. Depot held
   New York's Criminal Procedure Law and was asked for its Estates, Powers and Trusts Law; the CPL's parent page named it.
+
+## Counted is not read: lessons from a law re-read
+
+The sibling crawler landed 17,126 law sections with zero errors. When someone finally read a sample, much of it was
+broken: 29,299 sections were a website's menu ("Skip navigation Home Documents…"), 23,530 were a heading with no
+body, and a double-escaped regex had turned every "t" of 9,308 Alabama sections into a space ("he books… o de ermine
+he accuracy"). Every check had counted; none had read. In Scout:
+
+- **A content gate on recipe values.** A value that is page chrome (menu text, raw markup, a stylesheet rule) or has
+  lost common letters fails as `BAD_VALUE`, at compile and on every run.
+- **A regex lint at compile.** A double-escaped escape inside a character class (`[^\\t]` means "not a backslash
+  and not the letter t") is refused with that explanation.
+- **The skill says to read the test values yourself.** A wrong but plausible value is something only a reader
+  catches.
+- **Text decoded the way it was written.** Bytes that decode cleanly as UTF-8 are read as UTF-8. Otherwise Scout uses
+  the declared charset, but never UTF-16/32 without a byte-order mark (one state's pages declare UTF-16 and are
+  UTF-8), and falls back to windows-1252 (another state's pages lost every § when read as UTF-8).
+- **A site that asks for slower requests gets them,** for as long as it asks. That includes a `Retry-After` given as
+  an HTTP date.
+- **A download nobody is running says so.** The re-reads died with the one-off script that started them, and nothing
+  noticed. A cache job whose process is gone shows `interrupted`, and starting it again resumes where it stopped.
+
+## Structured data, archived block pages, and other things worth knowing
+
+- **schema.org data.** Many product pages carry clean `Product` data as JSON-LD even when their html is a mess.
+  `reach` returns it as `jsonld`, and the `jsonld` recipe step reads dotted paths (`offers.price`, `sku`). Title tails
+  like "| CT4000T705SSD5 | crucial.com" are cut from names. `crucial.com/ssd` ships in the book, built entirely from
+  archived pages while crucial.com's edge rejects Scout:
+  `RESULT: ok | crucial.com/ssd | CT4000T705SSD5 | … archived=2026-07-20; name=Crucial T705 4TB PCIe Gen5 NVMe M.2 SSD with heatsink; sku=CT4000T705SSD5; price=565.99; currency=USD`
+- **An archived copy can itself be a block page.** The newest Wayback copy of some AMD pages is Akamai's 403, and of
+  some Crucial pages it's the edge's rejection page, captured with a 200. Scout tells a replayed error (it has a
+  `Memento-Datetime`) apart from the archive refusing Scout, so it no longer holds the archive by mistake. It then walks
+  back through older, distinct captures until one is real content. The archive pace is 5 seconds, with a 15-minute
+  hold when it refuses.
+- **Cloudflare's 2026 wall** ("Performing security verification… protect against malicious bots") is read as a
+  challenge, not content.
+- **A map started inside a section stays inside it.** `site_map("https://site/en/products/processors/")` lists only
+  that section. The site's root maps the whole site.
+- **Function words don't steer.** "and", "the", "section", "law" no longer pick which link to follow.
+- **A dropped connection to a renderer service gets one retry** on a fresh connection before it counts as a failure.
+- **Same-name companies and terms of use.** Edwards Lifesciences is not Edwards fire safety, simplex.com is not
+  Simplex fire, and sol.com is not Sol-Ark: the skill checks the site names what you mean. robots.txt is not the only
+  rule either. LexisNexis's terms forbid automated access without written permission, so its entry in the book is a
+  permission request, not a route.
 
 ## Errors that say what to do next
 
