@@ -14,6 +14,9 @@ Turn that into a `want` regex: a model number, `price|\$`, `weight|kg`. If there
 Call `scout` with `url` and `want`.
 
 - If `recipes` already has one for what the user wants and its status is ok, use it with `run` and stop here.
+- If the user wants a US state's statutes or code, call `laws` first: it lists the states Scout reads whole from the
+  legislature's own site. Show a few sections with `laws(state, limit)`, and give the user the command for the whole
+  code: `scout-mcp laws <state> --out <state>.jsonl`. Only scout a law site that `laws` doesn't cover.
 - If you found the site by searching, check `own_hosts`. A host that carries the subject's name but that its site
   doesn't link to is a reseller, not the maker.
 - Make sure the site is the company or body you mean. Same-name companies are common: Edwards Lifesciences is not

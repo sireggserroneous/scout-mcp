@@ -1,6 +1,6 @@
 {
   "name": "scout",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Scout MCP: a web scout that learns per host which path through the maze ends at good information, and compiles it into one-call recipes small models (Qwen 4B) run reliably.",
   "author": {
     "name": "Pedro Paulino (Sir Eggs Erroneous)",

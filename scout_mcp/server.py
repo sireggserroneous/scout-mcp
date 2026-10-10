@@ -139,6 +139,20 @@ async def recipes(host: str = "") -> list:
     return await asyncio.to_thread(S.recipes, host)
 
 
+@mcp.tool()
+async def laws(state: str = "", limit: int = 10) -> dict:
+    """US state codes read whole from each legislature's own site. No state: the list of states Scout can read, with each
+    one's citation form and source. A state (e.g. 'us-tx'): its first `limit` sections (max 50) as citation, heading, text
+    and url. A whole code is tens of thousands of sections: run `scout-mcp laws <state> --out file.jsonl` for that."""
+    from . import laws as L
+    if not state:
+        return {"states": L.states(), "whole_code": "scout-mcp laws <state> --out <state>.jsonl"}
+    if state not in {s["state"] for s in L.states()}:
+        return {"ok": False, "error": {"code": "NO_STATE", "message": f"no law recipe for {state!r}", "next_steps": ["laws() lists the states"]}}
+    out = await asyncio.to_thread(lambda: list(L.sections(state, log=lambda m: None, limit=max(1, min(int(limit or 10), 50)))))
+    return {"ok": True, "state": state, "sections": out, "whole_code": f"scout-mcp laws {state} --out {state}.jsonl"}
+
+
 def main():
     """No arguments: the MCP server on stdio. `scout-mcp run <recipe> [input]` prints one RESULT line (exit 1 on fail);
     `scout-mcp recipes` lists the cards; `scout-mcp laws [<state>]` reads a state's code. Small models are good at one shell command."""

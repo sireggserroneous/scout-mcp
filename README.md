@@ -504,6 +504,7 @@ When Scout fails, it returns an error `code`, a `message`, and `next_steps` writ
 | `moves(action, …)` | big model | lists, proposes or retires moves |
 | `hold(host, reason?, lift?, min_interval?)` | big model | keeps every agent off a site (or lets them back), slows Scout's pace there |
 | `enroll(action, host?, info?, note?)` | big model | records a site's official route, and lists, tests and closes enrollment requests |
+| `laws(state?, limit?)` | any model | the US state codes Scout reads whole from each legislature; a few sections of one (the whole code: `scout-mcp laws <state>`) |
 | `memory(host?)` | big model | reader order, routes, moves and recent failures for a host |
 | `recipes(host?)` | both | compiled recipes with scores, status and cards |
 | `run(recipe, input?, inputs?, cached?)` | **small model** | runs a recipe, returns one RESULT line (one per input) |

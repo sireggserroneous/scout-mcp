@@ -1,6 +1,6 @@
 [project]
 name = "scout-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "An honest, evolving web scout as an MCP server: learns per host which path through the maze ends at good information."
 readme = "README.md"
 license = "MIT"

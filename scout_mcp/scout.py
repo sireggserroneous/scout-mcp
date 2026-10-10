@@ -15,7 +15,7 @@ import urllib.error, urllib.parse, urllib.request, urllib.robotparser
 from collections import Counter
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 HOME = "https://github.com/sireggserroneous/scout-mcp"
 UA = os.environ.get("SCOUT_USER_AGENT") or f"ScoutMCP/{VERSION} (+{HOME})"
 HEADERS = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8",
