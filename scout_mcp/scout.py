@@ -1762,7 +1762,11 @@ def _same(v, rules):
 # Values that are not content (Depot, 2026-10-04: "every check counted, none read"). 29,299 sections landed as a site's
 # menu ("Skip navigation Home Documents …"), and a double-escaped character class turned every "t" of 9,308 Alabama
 # sections into a space ("he books… o de ermine he accuracy"); 17,126 landed with 0 errors.
-_CHROME = re.compile(r"(?i)skip (?:navigation|to (?:main )?content)|menu website search|\bhref=|[.#][\w-]+\s*\{\s*[\w-]+\s*:")
+_CHROME = re.compile(r"(?i)skip (?:navigation|to (?:main )?content)|menu website search|\bhref=|[.#][\w-]+\s*\{\s*[\w-]+\s*:|"
+                     # a legislature's own furniture (Depot, 2026-10-10): Virginia's LIS menu stamped on 32,043 sections,
+                     # Ohio's version banner and footer on 12,163, Minnesota's revisor page on 6,869, all with 0 errors
+                     r"lis learning center|register account\s*/|latest legislation:.{0,120}pdf: download|available versions of this section|"
+                     r"authenticate pdf resources search|full chapter text version list")
 
 
 def not_content(text):
@@ -1771,7 +1775,13 @@ def not_content(text):
         return "page chrome (menu, markup or a stylesheet)"
     low = text.lower()
     letters = sum(c.isalpha() for c in low)
-    if letters > 80 and min(low.count("t"), low.count("e")) < letters * 0.02:
+    # A cleaner that ate every "t" leaves almost none, and leaves stubs ("ha" for that, "o" for to, "he" for the). Short prose
+    # with few t's, an all-capitals notice, or a list that is one word over and over are not damage (Depot, 2026-10-06).
+    words = re.findall(r"[a-z]+", low)
+    top = max(Counter(words).values()) / len(words) if words else 0
+    ref = text if sum(c.islower() for c in text) > letters / 2 else low
+    stubs = sum(1 for w in re.findall(r"[A-Za-z]+", ref) if w in ("ha", "o", "he", "hese", "hey", "wih", "wha"))
+    if letters > 80 and top < 0.15 and ref.count("t") < letters * 0.002 and stubs >= 2:
         return "letters missing (a broken cleaner or a double-escaped regex)"
     return ""
 
@@ -2257,8 +2267,12 @@ def demo():
     assert _check_steps([{"reach": "https://c.example/p"}, {"jsonld": {"price": "offers.price", "gtin?": "gtin13"}}]) == ""
     assert "section" in _STEER_STOP and not [w for w in ["the", "section", "and"] if w not in _STEER_STOP]
     assert not_content("Skip navigation Home Documents Senate Assembly " * 3) and not_content(
-        "he books of accoun shall be kep a he office of he coun y reasurer for regular inspec ion by he audi or and he board")
+        "The revenue commissioner or his or her designee may examine he books, papers, and records of any employer or licensee "
+        "o de ermine he accuracy of any re urn made")
     assert not_content("The books of account shall be kept at the office of the county treasurer for inspection by the auditor.") == ""
+    assert not_content("June 29, 2011 Latest Legislation: House Bill 9 - 129th General Assembly PDF: Download Authenticated PDF All statutes")
+    assert not_content("No physician shall prescribe whiskey, rum, gin or brandy or any prohibited liquor for medicinal purposes, except alcohol.") == ""
+    assert not_content("THIS SECTION WAS AMENDED AND RENUMBERED AS SECTION 17-9-6 BY ACT 2006-570 IN THE 2006 REGULAR SESSION.") == ""
     assert "double-escaped" in _check_steps([{"reach": "https://a.example/"}, {"extract": {"text": "^([^\\\\t]+)$"}}])
     assert _check_steps([{"reach": "https://a.example/"}, {"extract": {"text": "^([^\\t]+)$"}}]) == ""
     import email.utils

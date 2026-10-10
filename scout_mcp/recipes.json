@@ -491,7 +491,26 @@
    "wall": "ROBOTS_DISALLOWED"
   },
   "mgaleg.maryland.gov": {
-   "render": true
+   "render": true,
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "MGALEG_MARYLAND_GOV",
+    "api_host": "mgaleg.maryland.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "open_api",
+    "name": "Maryland General Assembly statute text",
+    "base_url": "https://mgaleg.maryland.gov/mgawebsite/api/Laws/",
+    "docs_url": "https://mgaleg.maryland.gov/mgawebsite/Laws/Statutes",
+    "notes": "api/Laws/GetSections lists an article's sections; Laws/StatuteText?article=<code>&section=<n> is one section. 36 articles, ~40,000 sections; the official text has no catchlines. No robots.txt.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
   },
   "mikrotik.com": {
    "listing": "https://mikrotik.com/products",
@@ -1011,7 +1030,25 @@
    ]
   },
   "www.ilga.gov": {
-   "render": true
+   "render": true,
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "ILGA_GOV",
+    "api_host": "www.ilga.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "alternative",
+    "name": "Illinois Compiled Statutes, act full-text pages",
+    "base_url": "https://www.ilga.gov/Legislation/ILCS/Chapters",
+    "notes": "details?ActID=<id>&ChapAct=FullText, one table per section. robots.txt Crawl-delay 10: the whole ILCS takes ~8 h.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
   },
   "www.imdb.com": {
    "wall": "ROBOTS_DISALLOWED"
@@ -1194,6 +1231,380 @@
   },
   "www.woodhousehyundai.com": {
    "render": true
+  },
+  "statutes.capitol.texas.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "STATUTES_CAPITOL_TEXAS_GOV",
+    "api_host": "statutes.capitol.texas.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "bulk",
+    "name": "Texas Statutes code downloads (one zip of chapter HTML per code)",
+    "base_url": "https://tcss.legis.texas.gov/resources/Zips/",
+    "sample": "https://statutes.capitol.texas.gov/assets/StatuteCodeDownloads.json",
+    "notes": "The JSON lists 31 codes; each is <CODE>.htm.zip of chapter files cut at section anchors. The whole statutes in 31 requests.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "olls.info": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "OLLS_INFO",
+    "api_host": "olls.info",
+    "cost": "free",
+    "terms": "Offered for personal use. C.R.S. 2-5-118 asks anyone republishing the statutes to file a statement with the Committee on Legal Services, which also provides the official data set on request.",
+    "route": "bulk",
+    "name": "Colorado Revised Statutes title download (OLLS)",
+    "base_url": "https://olls.info/crs/",
+    "sample": "https://olls.info/crs/crs2026-htm.zip",
+    "docs_url": "https://content.leg.colorado.gov/agencies/office-legislative-legal-services/2026-crs-titles-download",
+    "notes": "Every title as HTML, 37 MB. The official online C.R.S. is LexisNexis-hosted; this download is the legislature's own copy. robots.txt disallows only /crs-archive/.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "le.utah.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "LE_UTAH_GOV",
+    "api_host": "le.utah.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "bulk",
+    "name": "Utah Code XML, one file per title",
+    "base_url": "https://le.utah.gov/xcode/",
+    "sample": "https://le.utah.gov/xcode/code.html",
+    "notes": "code.html names the current version; each title is Title<t>/<version>.xml. robots.txt Crawl-delay 10. The server omits its intermediate certificate: fetch it from the AIA url, never disable verification.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "law.lis.virginia.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "LAW_LIS_VIRGINIA_GOV",
+    "api_host": "law.lis.virginia.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "bulk",
+    "name": "Code of Virginia per-title CSV (Virginia Law Library)",
+    "base_url": "https://law.lis.virginia.gov/CSV/",
+    "docs_url": "https://law.lis.virginia.gov/law-library/",
+    "notes": "CoVTitle_<N>.csv per title, each section's HTML body in a column: 76 requests instead of 33,000 pages. Unpaced section-page crawling gets 403 (a throttle, not a UA rule). Section pages carry the LIS menu; cut the law box.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "ndlegis.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "NDLEGIS_GOV",
+    "api_host": "ndlegis.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "bulk",
+    "name": "North Dakota Century Code, whole code on one page",
+    "sample": "https://ndlegis.gov/prod/cencode/",
+    "notes": "46 MB HTML, one div.section per section; subsection numbers are drawn by list styles, so write them back into the text.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "nebraskalegislature.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "NEBRASKALEGISLATURE_GOV",
+    "api_host": "nebraskalegislature.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "alternative",
+    "name": "Nebraska statutes range view (400 sections per request)",
+    "sample": "https://nebraskalegislature.gov/laws/display_html.php?begin_section=1-101&end_section=1-150",
+    "notes": "Ids from browse-chapters.php?chapter=N, ranges in the range view's own sort order. One page per statute at the robots Crawl-delay of 3 s is ~41 h; ranges are ~16 min. Comma ids (2-10,100) exist.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "sdlegislature.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "SDLEGISLATURE_GOV",
+    "api_host": "sdlegislature.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "open_api",
+    "name": "South Dakota Legislature Statutes API",
+    "base_url": "https://sdlegislature.gov/api/Statutes/",
+    "sample": "https://sdlegislature.gov/api/Statutes/Title",
+    "notes": "Each title as one HTML document: /api/Statutes/<t>.html?all=true. Served as UTF-16LE with no byte-order mark: decode it explicitly.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "legislature.maine.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "LEGISLATURE_MAINE_GOV",
+    "api_host": "legislature.maine.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "bulk",
+    "name": "Maine Revised Statutes per-title .docx",
+    "base_url": "https://legislature.maine.gov/statutes/",
+    "notes": "All 64 titles, lettered ones too (7-A, 39-A). Sections start at bold paragraphs; some are printed twice (current and future): keep the one in force.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "www.palegis.us": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "PALEGIS_US",
+    "api_host": "www.palegis.us",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "bulk",
+    "name": "Pennsylvania Consolidated Statutes, full-title HTML",
+    "base_url": "https://www.palegis.us/statutes/consolidated/",
+    "notes": "view-statute?txtType=HTM&ttl=<N>&iFrame=true is a whole title; sections open at the publisher's marker <div class=\"Comment\">18c301s</div>. ttl=0 is the Constitution.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "wyoleg.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "WYOLEG_GOV",
+    "api_host": "wyoleg.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "alternative",
+    "name": "Wyoming Statutes, Rocket NXT publication",
+    "base_url": "https://wyoleg.gov/NXT/gateway.dll",
+    "notes": "Walk the XML table of contents (f=xmlcontents, getchildren, depth=1); each chapter document once as HTML. The title PDFs are larger than common PDF readers' text caps.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "www.revisor.mn.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "REVISOR_MN_GOV",
+    "api_host": "www.revisor.mn.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "alternative",
+    "name": "Minnesota Statutes full chapter pages",
+    "base_url": "https://www.revisor.mn.gov/statutes/",
+    "sample": "https://www.revisor.mn.gov/statutes/cite/3/full",
+    "notes": "One div.section per section; section pages carry the revisor's menu and version list, cut the law box.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "downloads.leginfo.legislature.ca.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "DOWNLOADS_LEGINFO_LEGISLATURE_CA_GOV",
+    "api_host": "downloads.leginfo.legislature.ca.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "bulk",
+    "name": "California legislative bulk data (pubinfo)",
+    "base_url": "https://downloads.leginfo.legislature.ca.gov/",
+    "sample": "https://downloads.leginfo.legislature.ca.gov/pubinfo_2025.zip",
+    "notes": "1.28 GB: stream it to disk. LAW_SECTION_TBL.dat names code, section and file; each section's text is a separate .lob entry. leginfo.legislature.ca.gov itself answers with a Cloudflare challenge."
+   }
+  },
+  "col.guamcourts.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "COL_GUAMCOURTS_GOV",
+    "api_host": "col.guamcourts.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "bulk",
+    "name": "Guam Code Annotated chapter PDFs (Compiler of Laws)",
+    "docs_url": "https://col.guamcourts.gov/legal-publications/guam-code-annotated",
+    "notes": "~800 chapter and UCC-division PDFs. Large chapters exceed 200,000 characters of text. guamcourts.org now redirects here.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "bvirtualogp.pr.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "BVIRTUALOGP_PR_GOV",
+    "api_host": "bvirtualogp.pr.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "alternative",
+    "name": "Puerto Rico OGP Biblioteca Virtual, consolidated laws (Leyes de referencia)",
+    "notes": "The index data on main_view.aspx lists ~14,000 documents; ~2,500 are consolidated laws as amended. The 1930 Civil Code was repealed by Ley 55-2020. No robots.txt.",
+    "tested": {
+     "status": 200,
+     "real_data": true
+    }
+   }
+  },
+  "nmonesource.com": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "NMONESOURCE_COM",
+    "api_host": "nmonesource.com",
+    "cost": "by agreement",
+    "terms": "Norma Terms of Use prohibit use 'via automated mechanisms, in particular for bulk downloading of documents' without Lexum's prior written consent.",
+    "route": "commercial",
+    "name": "Lexum written consent (NMOneSource terms forbid automated mechanisms)",
+    "signup_url": "mailto:nmonesource_support@lexum.com",
+    "notes": "Official free source of NMSA 1978 (New Mexico Compilation Commission). One EPUB per chapter (/w/nmos/n-<id>-en.epub), ~130 files; ask Lexum and the Commission for consent or a bulk file."
+   }
+  },
+  "codes.ohio.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "CODES_OHIO_GOV",
+    "api_host": "codes.ohio.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "none",
+    "name": "Ohio Revised Code site (robots.txt disallows all)",
+    "notes": "robots.txt is the single line 'User-agent: * Disallow: /' with the newline missing, so parsers read no rules; the intent is disallow-all. No other official copy found (legislature.ohio.gov links here). Ask the Legislative Service Commission."
+   }
+  },
+  "oklegislature.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "OKLEGISLATURE_GOV",
+    "api_host": "oklegislature.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "none",
+    "name": "Oklahoma Statutes (robots.txt disallows all)",
+    "notes": "robots.txt disallows / and *.pdf; the title PDFs live at /OK_Statutes/CompleteTitles/. oscn.net disallows all crawlers too. Ask the Legislative Service Bureau."
+   }
+  },
+  "capitol.tn.gov": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "CAPITOL_TN_GOV",
+    "api_host": "capitol.tn.gov",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "none",
+    "name": "Tennessee Code: official copy is LexisNexis-hosted",
+    "notes": "robots.txt disallows all; the official code redirects to advance.lexis.com, whose terms forbid automation. Ask the Tennessee Code Commission."
+   }
+  },
+  "www.arkleg.state.ar.us": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "ARKLEG_STATE_AR_US",
+    "api_host": "www.arkleg.state.ar.us",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "none",
+    "name": "Arkansas Code: official copy is LexisNexis-hosted",
+    "notes": "The legislature publishes Acts, not the code. The Arkansas Code Revision Commission grants reproduction permission."
+   }
+  },
+  "legvi.org": {
+   "access": {
+    "auth": {
+     "kind": "none"
+    },
+    "checked": "2026-10-10",
+    "key": "LEGVI_ORG",
+    "api_host": "legvi.org",
+    "cost": "free",
+    "terms": "Official government publication",
+    "route": "none",
+    "name": "Virgin Islands Code: official copy is LexisNexis-hosted",
+    "notes": "The legislature's site links to the LexisNexis public-access container; ask the Legislature of the Virgin Islands."
+   }
   }
  },
  "recipes": [

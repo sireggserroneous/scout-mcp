@@ -389,6 +389,37 @@ he accuracy"). Every check had counted; none had read. In Scout:
 - **A download nobody is running says so.** The re-reads died with the one-off script that started them, and nothing
   noticed. A cache job whose process is gone shows `interrupted`, and starting it again resumes where it stopped.
 
+## Official routes to state codes
+
+The sibling crawler rebuilt about 25 state codes on 2026-10-10. For most of them the best route was not the section pages
+but something the legislature publishes for whole-code reading. Those routes are now in the book (`enroll("list")` shows
+them, and a wall on these hosts leads with them):
+
+| Site | Official route | Why it beats the pages |
+|---|---|---|
+| statutes.capitol.texas.gov | one zip of chapter HTML per code | all 30 codes, about 122,000 sections, in 31 requests |
+| olls.info | Colorado's title download (HTML zip) | the online C.R.S. is a commercial platform's |
+| le.utah.gov | XML per title | structured text, current and future versions marked |
+| law.lis.virginia.gov | CSV per title | 76 requests instead of 33,000 throttled pages |
+| ndlegis.gov | the whole Century Code on one page | one fetch |
+| nebraskalegislature.gov | range view, 400 sections a request | 16 minutes instead of 41 hours at its crawl delay |
+| sdlegislature.gov | Statutes API | a title per request (UTF-16 with no byte-order mark) |
+| mgaleg.maryland.gov | statute text API | an article's section list, then each section |
+| legislature.maine.gov, www.palegis.us | whole titles (.docx, HTML) | one file per title |
+| downloads.leginfo.legislature.ca.gov | pubinfo bulk zip (1.28 GB) | the website answers with a challenge |
+| nmonesource.com | the platform owner's written consent | its terms forbid automated reading |
+| codes.ohio.gov, oklegislature.gov, capitol.tn.gov | none: robots.txt disallows all, or the official copy is on a commercial platform | the request to make is recorded |
+
+What else that rebuild taught:
+
+- **A one-line robots.txt still means what it says.** Ohio's reads `User-agent: * Disallow: /` with the newline missing,
+  so parsers find no rules. The intent is plain, so it is treated as disallow-all.
+- **Counted is still not read.** Virginia's 32,000 sections, Ohio's 12,000 and Minnesota's 6,900 had landed as the
+  legislature's own menus, version banners and footers. Each passed every count. Those phrases are in the content gate,
+  and the missing-letters test now leaves short prose, all-capitals notices and lists alone.
+- **More requests at once don't make one host faster.** Its pace is fixed by its gap; 39 jobs behind one 2-second gate
+  each moved a page a minute and looked dead.
+
 ## Structured data, archived block pages, and other things worth knowing
 
 - **schema.org data.** Many product pages carry clean `Product` data as JSON-LD even when their html is a mess.
