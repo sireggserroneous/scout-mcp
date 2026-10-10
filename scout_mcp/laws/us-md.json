@@ -1,0 +1,10 @@
+{
+ "doc": {
+  "citation": "Maryland Code",
+  "doc_type": "statute",
+  "source_url": "https://mgaleg.maryland.gov/mgawebsite/Laws/Statutes"
+ },
+ "citation": "Md. Code, {article} § {id}",
+ "delay": 0.8,
+ "script": "# Maryland Code from mgaleg.maryland.gov: every article's section list (api/Laws/GetSections), then each section's StatuteText box.\nimport re\nBASE = \"https://mgaleg.maryland.gov/mgawebsite\"\n\ndef sections():\n    _, page = fetch(BASE + \"/Laws/Statutes\")\n    arts = []\n    for code, name in re.findall(r'<option value=\"(g[a-z]{2})\">([^<]+?) - \\(g[a-z]{2}\\)</option>', page):\n        if code not in [a for a, _ in arts]:\n            arts.append((code, name.strip()))\n    log(f\"{len(arts)} articles\")\n    for code, name in arts:\n        try:\n            secs = [s[\"DisplayText\"] for s in fetch_json(f\"{BASE}/api/Laws/GetSections?articleCode={code}&enactments=true\")]\n        except Exception as e:\n            log(f\"section list failed {code}: {e}\"); continue\n        log(f\"{code} {name}: {len(secs)} sections\")\n        for sid in secs:\n            url = f\"{BASE}/Laws/StatuteText?article={code}&section={sid}&enactments=true\"\n            try:\n                _, html = fetch(url)\n            except Exception as e:\n                log(f\"failed {code} {sid}: {e}\"); continue\n            lines = block_text(html, id=\"StatuteText\").split(\"\\n\")\n            # the box: \"Article - X\", Previous/Next buttons, \"§1–302.\", the law, Previous/Next\n            start = next((i for i, l in enumerate(lines) if l.startswith(\"§\")), None)\n            if start is None:\n                log(f\"no section mark {code} {sid}\"); continue\n            body = [re.sub(r\"^§\\s*\\S+\\s*\", \"\", lines[start])] + lines[start + 1:]\n            while body and body[-1].replace(\"Previous\", \"\").replace(\"Next\", \"\").strip() == \"\":\n                body.pop()\n            text = \"\\n\".join(body).strip()\n            if not text:\n                continue\n            yield {\"id\": sid, \"heading\": \"\", \"text\": text, \"url\": url, \"vars\": {\"article\": name}}\n"
+}

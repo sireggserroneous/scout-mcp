@@ -1,0 +1,9 @@
+{
+ "doc": {
+  "citation": "American Samoa Code Annotated",
+  "doc_type": "code",
+  "source_url": "https://asbar.org/code-annotated/"
+ },
+ "citation": "A.S.C.A. § {id}",
+ "script": "import re, html\ndef sections():\n    seen = set()\n    for n in range(1, 73):\n        try:\n            kind, browse = fetch('https://asbar.org/legal-resources/code-annotated/?wpv_view_count=16436-TCPID13688&wpv_paged=' + str(n))\n        except Exception as e:\n            log('browse page failed ' + str(n) + ' ' + repr(e)); continue\n        for url in dict.fromkeys(re.findall(r'href=[\"\\'](https://asbar.org/code-annotated/[^?#\"\\']+/)', browse)):\n            if url in seen:\n                continue\n            seen.add(url)\n            try:\n                kind, body = fetch(url)\n            except Exception as e:\n                log('section failed ' + url + ' ' + repr(e)); continue\n            t = re.search(r'<title>\\s*([0-9]+\\.[0-9]+(?:\\.[0-9]+)?)\\s+(.*?)\\s+-\\s+American Samoa Bar Association', body, re.S)\n            text = block_text(body, cls='fl-module-fl-post-content')          # the post body: the section and its history\n            if t and text:\n                yield {'id': t.group(1), 'heading': html.unescape(t.group(2)).strip(), 'text': text, 'url': url}\n"
+}

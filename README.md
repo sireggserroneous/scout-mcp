@@ -389,6 +389,39 @@ he accuracy"). Every check had counted; none had read. In Scout:
 - **A download nobody is running says so.** The re-reads died with the one-off script that started them, and nothing
   noticed. A cache job whose process is gone shows `interrupted`, and starting it again resumes where it stopped.
 
+## The laws of the United States
+
+Scout can read a state's whole code from the legislature's own site and write it out, one JSON line per section:
+
+```
+scout-mcp laws                                   # the states it can read, with their citation form and source
+scout-mcp laws us-tx --out texas.jsonl           # every section of the Texas statutes
+scout-mcp laws us-nv --limit 5                   # a quick look
+```
+
+Each line is `{"citation": "NRS 1.010", "heading": "...", "text": "...", "url": "<the page it came from>"}`. A state is a
+short script in `scout_mcp/laws/<state>.json`: a `sections()` generator that reads the legislature's table of contents,
+API or bulk file and yields each section's own words. Every request goes through Scout's gate (robots.txt and its crawl
+delay, holds), at the recipe's own pace when that is slower. Text that is page chrome or has lost its letters is skipped.
+Big bulk files (Texas's code zips, North Dakota's single page) are downloaded once a day to Scout's data folder.
+
+**33 ready:** AL, AS, CO, CT, GU, IA, IL, LA, MD, ME, MI, MN, MP, MT, ND, NE, NH, NJ, NV, NY, OR, PA, PR, RI, SD, TX, UT,
+VA, VT, WA, WI, WV, WY. These are the scripts a sibling crawler used in October 2026 to land each code whole: Texas 119,000
+sections, Illinois 69,000, Nebraska 55,000, Nevada 50,000. A full state takes from minutes (Texas, 31 downloads) to hours
+(Illinois and New Hampshire ask for 10 and 11 seconds between requests).
+
+- **New York** reads the Senate's Open Legislation API, which needs a free key: put it in `SCOUT_KEY_NYSENATE`.
+- **Louisiana** takes its Revised Statutes list from a dated snapshot, because the site only opens a title by form post.
+- **Not here yet:** AK, AZ, DC, DE, FL, GA, HI, ID, KS, KY, MA, MO, NC and SC are read by the sibling crawler's page-pattern
+  engine and still need porting to scripts. California needs its 1.28 GB bulk zip read entry by entry. Indiana serves its
+  code zip only to browsers.
+- **Need permission first:** Arkansas, Mississippi, Tennessee and the Virgin Islands publish their official code only
+  through LexisNexis, whose terms forbid automated reading. New Mexico's official site is on a platform whose terms
+  require written consent. Ohio's and Oklahoma's robots.txt files disallow all crawlers. The routes section below says
+  whom to ask.
+
+The text is the law as each site publishes it. It is not an official or certified copy; cite the source url.
+
 ## Official routes to state codes
 
 The sibling crawler rebuilt about 25 state codes on 2026-10-10. For most of them the best route was not the section pages

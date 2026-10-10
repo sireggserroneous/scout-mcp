@@ -1,0 +1,10 @@
+{
+ "doc": {
+  "citation": "Minnesota Statutes",
+  "doc_type": "statute",
+  "source_url": "https://www.revisor.mn.gov/statutes/"
+ },
+ "citation": "Minn. Stat. § {id}",
+ "delay": 1.0,
+ "script": "import re\n\nBASE = \"https://www.revisor.mn.gov\"\n\ndef chapter_sections(html):\n    # the subdivision headnote sits inside the \"Subd. 2.\" h2 and the permalink anchor is a bare \"§\": space the one, blank the other\n    html = html.replace('<span class=\"headnote\">', ' <span class=\"headnote\">')\n    html = re.sub(r'(<a [^>]*class=\"permalink\"[^>]*>)§</a>', r'\\1</a>', html)\n    for t in block_texts(html, cls=\"section\"):\n        first, _, body = t.partition(\"\\n\")\n        m = re.match(r\"^(\\d+[A-Z]*\\.[0-9][0-9A-Z.\\-]*)\\s*(.*)$\", first)\n        if not m:\n            log(\"odd section head %r\" % first[:60]); continue\n        yield m.group(1), m.group(2).strip(), body.strip()\n\ndef sections():\n    k, toc = fetch(BASE + \"/statutes/\")\n    parts = []\n    for h in re.findall(r'href=\"(https://www\\.revisor\\.mn\\.gov/statutes/part/[^\"]+)\"', toc):\n        if h not in parts:\n            parts.append(h)\n    log(\"parts %d\" % len(parts))\n    seen = set()\n    for pu in parts:\n        try:\n            k, page = fetch(pu)\n        except Exception as e:\n            log(\"part failed %s: %s\" % (pu, e)); continue\n        chs = []\n        for c in re.findall(r'href=\"https://www\\.revisor\\.mn\\.gov/statutes/cite/([0-9]+[A-Z]*)\"', page):\n            if c not in chs:\n                chs.append(c)\n        for ch in chs:\n            url = \"%s/statutes/cite/%s/full\" % (BASE, ch)\n            try:\n                k, html = fetch(url)\n            except Exception as e:\n                log(\"chapter %s failed: %s\" % (ch, e)); continue\n            n = 0\n            for sid, head, text in chapter_sections(html):\n                if sid in seen or not text:\n                    continue\n                seen.add(sid); n += 1\n                yield {\"id\": sid, \"heading\": head, \"text\": text, \"url\": url + \"#stat.\" + sid}\n            if not n:\n                log(\"chapter %s: no live sections\" % ch)\n"
+}

@@ -1,0 +1,9 @@
+{
+ "doc": {
+  "citation": "West Virginia Code",
+  "doc_type": "statute",
+  "source_url": "https://code.wvlegislature.gov/"
+ },
+ "citation": "W.Va. Code § {id}",
+ "script": "import re\nID = re.compile(r'^[^§\\n]{0,3}§\\s*(?P<id>[0-9]+[A-Z]?-[0-9]+[A-Z]?-[0-9]+(?:\\.[0-9]+)?[A-Za-z]?)\\.?\\s*(?P<heading>.*)$')\ndef sections():\n    kind, sm = fetch('https://code.wvlegislature.gov/sitemap.xml')\n    # the section pages themselves: an article page arrives without its sections' text (the browser loads it later), which\n    # is how 23,530 sections landed as a bare heading (2026-10-03)\n    urls = list(dict.fromkeys(re.findall(r'<loc>\\s*(https://code\\.wvlegislature\\.gov/[0-9A-Z]+-[0-9A-Z]+-[0-9A-Z.]+/)\\s*</loc>', sm, re.I)))\n    log('section pages: ' + str(len(urls)))\n    for url in urls:\n        want = url.rstrip('/').rsplit('/', 1)[1]\n        try:\n            kind, body = fetch(url)\n        except Exception as e:\n            log('section failed ' + url + ' ' + repr(e)); continue\n        # the section's own box: its heading and its paragraphs. A box can open with its part's heading (\"Part I. General\",\n        # then \"§5B-2L-1. Short title.\"), and the neighbours' boxes on the page carry the heading alone: take the longest\n        # box whose section line is near its top (487 sections had landed as their neighbour's bare heading, 2026-10-06)\n        best = None\n        for block in block_texts(body, cls='sectiontext'):\n            lines = block.split('\\n')\n            for i, line in enumerate(lines[:4]):\n                m = ID.match(line)\n                if m and m.group('id').lower() == want.lower():\n                    text = '\\n'.join(lines[i:])\n                    if not best or len(text) > len(best[1]):\n                        best = (m, text)\n                    break\n        if best:\n            yield {'id': best[0].group('id'), 'heading': best[0].group('heading').strip(), 'text': best[1], 'url': url}\n"
+}

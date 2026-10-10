@@ -141,7 +141,7 @@ async def recipes(host: str = "") -> list:
 
 def main():
     """No arguments: the MCP server on stdio. `scout-mcp run <recipe> [input]` prints one RESULT line (exit 1 on fail);
-    `scout-mcp recipes` lists the cards. Small models are good at one shell command."""
+    `scout-mcp recipes` lists the cards; `scout-mcp laws [<state>]` reads a state's code. Small models are good at one shell command."""
     import json
     import sys
     args = sys.argv[1:]
@@ -161,6 +161,19 @@ def main():
         r = S.cache(args[1], rest[0] if rest else "", src, wait=True)
         print(json.dumps({k: r.get(k) for k in ("ok", "host", "listed", "already_cached", "to_fetch", "source", "error")}))
         sys.exit(0 if r.get("ok") else 1)
+    if args[:1] == ["laws"]:                       # scout-mcp laws [<state> [--limit N] [--out file.jsonl]]
+        from . import laws as L
+        if len(args) == 1:
+            for st in L.states():
+                print(json.dumps(st))
+            return
+        lim = int(args[args.index("--limit") + 1]) if "--limit" in args else None
+        out = open(args[args.index("--out") + 1], "w") if "--out" in args else sys.stdout
+        n = 0
+        for sec in L.sections(args[1], log=lambda m: print(m, file=sys.stderr, flush=True), limit=lim):
+            out.write(json.dumps(sec, ensure_ascii=False) + "\n"); n += 1
+        print(f"{args[1]}: {n} sections", file=sys.stderr)
+        return
     if args[:1] == ["recipes"]:
         for r in S.recipes(args[1] if len(args) > 1 else ""):
             print(json.dumps({k: r[k] for k in ("name", "about", "status", "bash")}))

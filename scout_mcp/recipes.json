@@ -476,7 +476,25 @@
    }
   },
   "legislation.nysenate.gov": {
-   "render": true
+   "render": true,
+   "access": {
+    "route": "enroll_free",
+    "name": "NY Senate Open Legislation API",
+    "base_url": "https://legislation.nysenate.gov/api/3/",
+    "docs_url": "https://legislation.nysenate.gov/static/docs/html/index.html",
+    "signup_url": "https://legislation.nysenate.gov/",
+    "auth": {
+     "kind": "query",
+     "name": "key"
+    },
+    "cost": "free",
+    "terms": "Free API key from the NY Senate",
+    "sample": "https://legislation.nysenate.gov/api/3/laws?limit=1",
+    "notes": "Every law volume with full text; the laws/us-ny crawler reads all 137.",
+    "checked": "2026-10-10",
+    "key": "NYSENATE",
+    "api_host": "legislation.nysenate.gov"
+   }
   },
   "legislature.idaho.gov": {
    "render": true

@@ -1,0 +1,9 @@
+{
+ "doc": {
+  "citation": "Ala. Code",
+  "doc_type": "statute",
+  "source_url": "https://alison.legislature.state.al.us/code-of-alabama"
+ },
+ "citation": "Ala. Code § {id}",
+ "script": "import json\nfrom urllib.parse import quote\nAPI = 'https://alison.legislature.state.al.us/graphql'\nPAGE = 500\nQ = ('query sections($limit: Int, $offset: Int) { codesOfAlabama(where: { type: { eq: Section } }, limit: $limit, offset: $offset) { data { codeId displayId title content history effectiveDate } } }')\ndef sections():\n    offset = 0\n    while True:\n        url = API + '?query=' + quote(Q, safe='') + '&variables=' + quote(json.dumps({'limit': PAGE, 'offset': offset}, separators=(',', ':')), safe='')\n        try:\n            kind, body = fetch(url)\n            d = json.loads(body if isinstance(body, str) else body.decode('utf-8', 'ignore'))\n            if d.get('errors'):\n                log('the API refused the query: ' + str(d['errors'])[:300]); break   # it dropped `versions` in 2026-10 and this said nothing\n            rows = ((d.get('data') or {}).get('codesOfAlabama') or {}).get('data') or []\n        except Exception as e:\n            log('page failed offset=' + str(offset) + ' ' + repr(e)); break\n        for row in rows:\n            sid = row.get('displayId')\n            text = block_text('<div id=\"law\">' + (row.get('content') or '') + '</div>', id='law')   # the official HTML, read by a real parser\n            if sid and len(text) >= 8:\n                yield {'id': sid, 'heading': (row.get('title') or sid).strip(), 'text': text,\n                       'url': 'https://alison.legislature.state.al.us/code-of-alabama?title=' + sid.split('-', 1)[0] + '&section=' + sid}\n        if len(rows) < PAGE:\n            break\n        offset += len(rows)\n"
+}

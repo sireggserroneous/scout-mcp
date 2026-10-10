@@ -1,0 +1,11 @@
+{
+ "doc": {
+  "title": "Michigan Compiled Laws",
+  "citation": "MCL",
+  "doc_type": "statute",
+  "source_url": "https://www.legislature.mi.gov/Laws/ChapterIndex"
+ },
+ "citation": "MCL {id}",
+ "delay": 1.0,
+ "script": "\"\"\"Michigan Compiled Laws: every chapter object on /Laws/ChapterIndex, read whole from /Home/RenderDoc; one section per sectionWrapper box (block_texts), pending '.new' texts skipped.\"\"\"\nimport re\nB = \"https://www.legislature.mi.gov\"\nHEAD = re.compile(r\"^(\\d+[a-z]?\\.\\d+[a-z]*(?:\\.[a-z]+)?(?:,\\s*\\d+[a-z]?\\.\\d+[a-z]*)*)\\s+(.*)$\")\n\ndef sections():\n    kind, index = fetch(B + \"/Laws/ChapterIndex\")\n    objs = []\n    for o in re.findall(r'href=\"/Home/GetObject\\?objectName=(mcl-chap\\d+[a-z]?)\"', index):\n        if o not in objs:\n            objs.append(o)\n    log(\"chapters: %d\" % len(objs))\n    for obj in objs:\n        url = B + \"/Home/RenderDoc?objectName=\" + obj\n        kind, body = fetch(url)\n        n = skipped = 0\n        for box in block_texts(body, cls=\"sectionWrapper\"):\n            lines = box.split(\"\\n\")\n            k = next((i for i, l in enumerate(lines) if HEAD.match(l)), None)\n            if k is None:\n                continue\n            sids, heading = HEAD.match(lines[k]).groups()\n            if \".new\" in sids or re.search(r\"\\.\\d+[a-z]*\\.[a-z]\", sids):\n                skipped += 1          # 2.13.new: a text not yet in force\n                continue\n            heading = heading.strip()\n            text = \"\\n\".join(lines[k + 1:]).strip() or heading      # \"2.208 Repealed. 2018, Act 321 ...\" is the whole entry\n            for sid in re.split(r\",\\s*\", sids):                    # \"2.104, 2.105 Repealed. ...\" disposes of both\n                n += 1\n                yield {\"id\": sid, \"heading\": heading, \"text\": text, \"url\": url + \"#\" + sid}\n        log(\"%s: %d sections%s\" % (obj, n, \" (%d pending texts skipped)\" % skipped if skipped else \"\"))\n"
+}
